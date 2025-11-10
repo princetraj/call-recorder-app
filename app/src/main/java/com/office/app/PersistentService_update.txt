@@ -1,0 +1,22 @@
+Add these imports at the top (after line 8):
+import android.content.Context;
+import android.telephony.PhoneStateListener;
+import android.telephony.TelephonyManager;
+
+Add these member variables (after line 25):
+    private CallStateListener callStateListener;
+    private TelephonyManager telephonyManager;
+
+Add in onCreate() method (after line 40):
+        // Setup call state listener
+        telephonyManager = (TelephonyManager) getSystemService(Context.TELEPHONY_SERVICE);
+        callStateListener = new CallStateListener(this);
+        if (telephonyManager != null) {
+            telephonyManager.listen(callStateListener, PhoneStateListener.LISTEN_CALL_STATE);
+        }
+
+Add in onDestroy() method (after line 87):
+        // Stop call state listener
+        if (telephonyManager != null && callStateListener != null) {
+            telephonyManager.listen(callStateListener, PhoneStateListener.LISTEN_NONE);
+        }

@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./gradlew:*)",
+      "Bash(tree /F /A \"F:\\works\\OfficeApp\")",
+      "Bash(php artisan route:list:*)",
+      "Bash(curl:*)",
+      "Bash(adb devices:*)",
+      "Bash(adb:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
