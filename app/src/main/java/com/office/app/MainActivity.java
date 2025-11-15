@@ -28,7 +28,6 @@ public class MainActivity extends Activity {
     private Button loginButton;
     private TextView loginStatus;
     private TextView userInfo;
-    private Button logoutButton;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -50,20 +49,12 @@ public class MainActivity extends Activity {
         loginButton = findViewById(R.id.login_button);
         loginStatus = findViewById(R.id.login_status);
         userInfo = findViewById(R.id.user_info);
-        logoutButton = findViewById(R.id.logout_button);
 
         // Setup click listeners
         loginButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 handleLogin();
-            }
-        });
-
-        logoutButton.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                handleLogout();
             }
         });
 
@@ -124,8 +115,8 @@ public class MainActivity extends Activity {
         if (prefsManager.isLoggedIn()) {
             loginSection.setVisibility(View.GONE);
             statusSection.setVisibility(View.VISIBLE);
-            String email = prefsManager.getUserEmail();
-            userInfo.setText("Logged in as: " + email);
+            String userId = prefsManager.getUserId();
+            userInfo.setText("Logged in as User ID: " + userId);
         } else {
             loginSection.setVisibility(View.VISIBLE);
             statusSection.setVisibility(View.GONE);
@@ -136,25 +127,25 @@ public class MainActivity extends Activity {
     }
 
     private void handleLogin() {
-        String email = emailInput.getText().toString().trim();
+        String userId = emailInput.getText().toString().trim();
         String password = passwordInput.getText().toString().trim();
 
-        if (email.isEmpty() || password.isEmpty()) {
-            loginStatus.setText("Please enter email and password");
+        if (userId.isEmpty() || password.isEmpty()) {
+            loginStatus.setText("Please enter user ID and password");
             return;
         }
 
         loginButton.setEnabled(false);
         loginStatus.setText("Logging in...");
 
-        apiService.login(email, password, new ApiService.ApiCallback() {
+        apiService.login(userId, password, new ApiService.ApiCallback() {
             @Override
             public void onSuccess(String token) {
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
                         prefsManager.saveAuthToken(token);
-                        prefsManager.saveUserEmail(email);
+                        prefsManager.saveUserId(userId);
                         loginStatus.setText("Login successful!");
                         emailInput.setText("");
                         passwordInput.setText("");

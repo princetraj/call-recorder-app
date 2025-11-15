@@ -10,6 +10,7 @@ import android.provider.ContactsContract;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
+import org.json.JSONObject;
 
 public class CallLogManager {
     private static final String TAG = "CallLogManager";
@@ -19,6 +20,7 @@ public class CallLogManager {
     private RecordingUploader recordingUploader;
     private TelephonyManager telephonyManager;
     private PhoneStateListener phoneStateListener;
+    private SimInfoHelper simInfoHelper;
     private String lastProcessedNumber = null;
     private long lastProcessedTime = 0;
 
@@ -28,6 +30,7 @@ public class CallLogManager {
         this.apiService = ApiService.getInstance();
         this.recordingUploader = new RecordingUploader(context);
         this.telephonyManager = (TelephonyManager) context.getSystemService(Context.TELEPHONY_SERVICE);
+        this.simInfoHelper = new SimInfoHelper(context);
     }
 
     public void startListening() {
@@ -109,20 +112,27 @@ public class CallLogManager {
                 String callerName = getContactName(number);
                 String timestamp = formatTimestamp(dateMillis);
 
+                // Get SIM information
+                JSONObject simInfo = simInfoHelper.getSimInfoForCallLog(cursor);
+
                 cursor.close();
 
-                Log.d(TAG, "Uploading call log - Number: " + number + ", Type: " + callType + ", Duration: " + duration);
+                Log.d(TAG, "Uploading call log - Number: " + number + ", Type: " + callType +
+                      ", Duration: " + duration + ", SIM: " + simInfo.toString());
 
                 String token = prefsManager.getAuthToken();
                 final String finalNumber = number;
                 final long finalDuration = duration;
                 final long finalDateMillis = dateMillis;
 
-                apiService.uploadCallLog(token, callerName, number, callType, duration, timestamp,
+                apiService.uploadCallLog(token, callerName, number, callType, duration, timestamp, simInfo,
                     new ApiService.ApiCallback() {
                         @Override
                         public void onSuccess(String result) {
                             Log.d(TAG, "Call log uploaded successfully");
+
+                            // Update device status after call ends
+                            updateDeviceStatusAfterCall(token);
 
                             // Try to parse call log ID from result
                             try {
@@ -139,6 +149,9 @@ public class CallLogManager {
                         @Override
                         public void onFailure(String error) {
                             Log.e(TAG, "Failed to upload call log: " + error);
+
+                            // Still update device status even if call log upload failed
+                            updateDeviceStatusAfterCall(token);
                         }
                     });
             } else {
@@ -196,6 +209,37 @@ public class CallLogManager {
     private String formatTimestamp(long millis) {
         SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault());
         return sdf.format(new Date(millis));
+    }
+
+    /**
+     * Update device status with fresh battery and signal strength data after call ends
+     */
+    private void updateDeviceStatusAfterCall(String token) {
+        try {
+            // Create a fresh DeviceInfoCollector to get current device status
+            DeviceInfoCollector deviceInfo = new DeviceInfoCollector(context);
+            JSONObject statusData = deviceInfo.getDeviceStatusInfo();
+
+            // Set call status to idle since call has ended
+            statusData.put("current_call_status", "idle");
+            statusData.put("current_call_number", JSONObject.NULL);
+
+            apiService.updateDeviceStatus(token, statusData, context, new ApiService.ApiCallback() {
+                @Override
+                public void onSuccess(String result) {
+                    Log.d(TAG, "Device status updated after call end - Battery: " +
+                          deviceInfo.getBatteryPercentage() + "%, Signal: " +
+                          deviceInfo.getSignalStrength());
+                }
+
+                @Override
+                public void onFailure(String error) {
+                    Log.e(TAG, "Failed to update device status after call: " + error);
+                }
+            });
+        } catch (Exception e) {
+            Log.e(TAG, "Error updating device status after call", e);
+        }
     }
 
     private void searchAndUploadRecording(final int callLogId, String phoneNumber,

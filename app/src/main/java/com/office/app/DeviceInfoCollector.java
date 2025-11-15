@@ -129,7 +129,31 @@ public class DeviceInfoCollector {
      * Get signal strength (0-4: none, poor, moderate, good, great)
      */
     public int getSignalStrength() {
+        // If currentSignalStrength is not yet set, try to get it immediately
+        if (currentSignalStrength == -1) {
+            return getImmediateSignalStrength();
+        }
         return currentSignalStrength;
+    }
+
+    /**
+     * Get immediate signal strength without waiting for listener
+     */
+    private int getImmediateSignalStrength() {
+        try {
+            TelephonyManager telephonyManager = (TelephonyManager) context.getSystemService(Context.TELEPHONY_SERVICE);
+            if (telephonyManager != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                // For Android P and above, we can get signal strength directly
+                android.telephony.SignalStrength signalStrength = telephonyManager.getSignalStrength();
+                if (signalStrength != null) {
+                    return signalStrength.getLevel();
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        // Return 0 (none) if we can't get signal strength
+        return 0;
     }
 
     /**

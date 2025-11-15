@@ -33,10 +33,10 @@ public class ApiService {
     }
 
     // Login to get auth token
-    public void login(String email, String password, final ApiCallback callback) {
+    public void login(String userId, String password, final ApiCallback callback) {
         try {
             JSONObject json = new JSONObject();
-            json.put("email", email);
+            json.put("user_id", userId);
             json.put("password", password);
 
             RequestBody body = RequestBody.create(
@@ -86,7 +86,7 @@ public class ApiService {
     // Upload single call log
     public void uploadCallLog(String token, String callerName, String callerNumber,
                               String callType, long duration, String timestamp,
-                              final ApiCallback callback) {
+                              JSONObject simInfo, final ApiCallback callback) {
         try {
             JSONObject json = new JSONObject();
             json.put("caller_name", callerName != null ? callerName : "Unknown");
@@ -94,6 +94,22 @@ public class ApiService {
             json.put("call_type", callType);
             json.put("call_duration", duration);
             json.put("call_timestamp", timestamp);
+
+            // Add SIM information if available
+            if (simInfo != null) {
+                if (simInfo.has("sim_slot_index")) {
+                    json.put("sim_slot_index", simInfo.get("sim_slot_index"));
+                }
+                if (simInfo.has("sim_name")) {
+                    json.put("sim_name", simInfo.get("sim_name"));
+                }
+                if (simInfo.has("sim_number")) {
+                    json.put("sim_number", simInfo.get("sim_number"));
+                }
+                if (simInfo.has("sim_serial_number")) {
+                    json.put("sim_serial_number", simInfo.get("sim_serial_number"));
+                }
+            }
 
             RequestBody body = RequestBody.create(
                 json.toString(),
@@ -252,6 +268,11 @@ public class ApiService {
 
     // Update device status
     public void updateDeviceStatus(String token, JSONObject statusInfo, final ApiCallback callback) {
+        updateDeviceStatus(token, statusInfo, null, callback);
+    }
+
+    // Update device status with context for remote logout handling
+    public void updateDeviceStatus(String token, JSONObject statusInfo, final android.content.Context context, final ApiCallback callback) {
         try {
             RequestBody body = RequestBody.create(
                 statusInfo.toString(),
@@ -280,6 +301,15 @@ public class ApiService {
                         JSONObject jsonResponse = new JSONObject(responseBody);
                         if (response.isSuccessful() && jsonResponse.getBoolean("success")) {
                             Log.d(TAG, "Device status updated successfully");
+
+                            // Check if device should logout
+                            boolean shouldLogout = jsonResponse.optBoolean("should_logout", false);
+                            if (shouldLogout && context != null) {
+                                Log.w(TAG, "Remote logout requested by admin");
+                                // Perform logout
+                                performRemoteLogout(context);
+                            }
+
                             callback.onSuccess("Status updated");
                         } else {
                             String message = jsonResponse.optString("message", "Status update failed");
@@ -294,6 +324,52 @@ public class ApiService {
         } catch (Exception e) {
             Log.e(TAG, "Error creating status update request", e);
             callback.onFailure("Error: " + e.getMessage());
+        }
+    }
+
+    // Perform remote logout
+    private void performRemoteLogout(android.content.Context context) {
+        try {
+            // Clear preferences
+            com.office.app.PrefsManager prefsManager = new com.office.app.PrefsManager(context);
+            prefsManager.logout();
+
+            Log.d(TAG, "Device logged out remotely");
+
+            // Show notification to user
+            showLogoutNotification(context);
+        } catch (Exception e) {
+            Log.e(TAG, "Error performing remote logout", e);
+        }
+    }
+
+    // Show notification about remote logout
+    private void showLogoutNotification(android.content.Context context) {
+        try {
+            android.app.NotificationManager notificationManager =
+                (android.app.NotificationManager) context.getSystemService(android.content.Context.NOTIFICATION_SERVICE);
+
+            String channelId = "office_app_channel";
+
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                android.app.NotificationChannel channel = new android.app.NotificationChannel(
+                    channelId,
+                    "Office App Notifications",
+                    android.app.NotificationManager.IMPORTANCE_HIGH
+                );
+                notificationManager.createNotificationChannel(channel);
+            }
+
+            android.app.Notification notification = new android.app.Notification.Builder(context, channelId)
+                .setContentTitle("Logged Out")
+                .setContentText("You have been logged out remotely by administrator")
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setAutoCancel(true)
+                .build();
+
+            notificationManager.notify(999, notification);
+        } catch (Exception e) {
+            Log.e(TAG, "Error showing logout notification", e);
         }
     }
 

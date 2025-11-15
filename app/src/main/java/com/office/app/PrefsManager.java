@@ -7,6 +7,7 @@ public class PrefsManager {
     private static final String PREFS_NAME = "OfficeAppPrefs";
     private static final String KEY_AUTH_TOKEN = "auth_token";
     private static final String KEY_USER_EMAIL = "user_email";
+    private static final String KEY_USER_ID = "user_id";
     private static final String KEY_IS_LOGGED_IN = "is_logged_in";
 
     private SharedPreferences prefs;
@@ -27,11 +28,22 @@ public class PrefsManager {
         return prefs.getString(KEY_AUTH_TOKEN, null);
     }
 
+    public void saveUserId(String userId) {
+        editor.putString(KEY_USER_ID, userId);
+        editor.apply();
+    }
+
+    public String getUserId() {
+        return prefs.getString(KEY_USER_ID, "");
+    }
+
+    @Deprecated
     public void saveUserEmail(String email) {
         editor.putString(KEY_USER_EMAIL, email);
         editor.apply();
     }
 
+    @Deprecated
     public String getUserEmail() {
         return prefs.getString(KEY_USER_EMAIL, "");
     }

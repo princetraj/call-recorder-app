@@ -93,7 +93,7 @@ public class CallStateListener extends PhoneStateListener {
             statusData.put("current_call_number", currentCallNumber != null ? currentCallNumber : JSONObject.NULL);
 
             ApiService apiService = ApiService.getInstance();
-            apiService.updateDeviceStatus(token, statusData, new ApiService.ApiCallback() {
+            apiService.updateDeviceStatus(token, statusData, context, new ApiService.ApiCallback() {
                 @Override
                 public void onSuccess(String result) {
                     Log.d(TAG, "Call status updated: " + currentCallStatus);
