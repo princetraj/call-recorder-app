@@ -1,4 +1,4 @@
-package com.office.app;
+package com.hairocraft.dialer;
 
 import android.app.Notification;
 import android.app.NotificationChannel;
@@ -15,10 +15,11 @@ import android.telephony.TelephonyManager;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
+import com.hairocraft.dialer.sync.SyncScheduler;
 
 public class PersistentService extends Service {
 
-    private static final String CHANNEL_ID = "OfficeAppChannel";
+    private static final String CHANNEL_ID = "HairocraftDialerChannel";
     private static final int NOTIFICATION_ID = 1001;
     private static final int STATUS_UPDATE_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
@@ -50,6 +51,10 @@ public class PersistentService extends Service {
         if (telephonyManager != null) {
             telephonyManager.listen(callStateListener, PhoneStateListener.LISTEN_CALL_STATE);
         }
+
+        // Schedule periodic sync for failed uploads
+        SyncScheduler.schedulePeriodicSync(this);
+        android.util.Log.d("PersistentService", "Sync scheduler initialized");
     }
 
     @Override
@@ -64,9 +69,9 @@ public class PersistentService extends Service {
         String currentTime = sdf.format(new Date());
 
         Notification notification = new Notification.Builder(this, CHANNEL_ID)
-                .setContentTitle("Office App is Running")
+                .setContentTitle("Hairocraft Dialer is Running")
                 .setContentText("Active since " + currentTime + " - Tap to open")
-                .setSubText("Office Monitoring Service")
+                .setSubText("Call Monitoring Service")
                 .setSmallIcon(android.R.drawable.stat_notify_sync)
                 .setContentIntent(pendingIntent)
                 .setOngoing(true)
@@ -126,10 +131,10 @@ public class PersistentService extends Service {
     private void createNotificationChannel() {
         NotificationChannel serviceChannel = new NotificationChannel(
                 CHANNEL_ID,
-                "Office App Active Status",
+                "Hairocraft Dialer Active Status",
                 NotificationManager.IMPORTANCE_HIGH
         );
-        serviceChannel.setDescription("Shows when the office app is running");
+        serviceChannel.setDescription("Shows when Hairocraft Dialer is running");
         serviceChannel.enableLights(true);
         serviceChannel.setLightColor(Color.GREEN);
         serviceChannel.setShowBadge(true);

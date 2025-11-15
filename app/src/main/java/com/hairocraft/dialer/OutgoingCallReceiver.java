@@ -1,4 +1,4 @@
-package com.office.app;
+package com.hairocraft.dialer;
 
 import android.content.BroadcastReceiver;
 import android.content.Context;

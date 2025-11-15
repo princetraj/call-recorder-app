@@ -3,8 +3,8 @@
 # proguardFiles setting in build.gradle.
 
 # Keep broadcast receivers
--keep class com.office.app.BootReceiver { *; }
--keep class com.office.app.RestartReceiver { *; }
+-keep class com.hairocraft.dialer.BootReceiver { *; }
+-keep class com.hairocraft.dialer.RestartReceiver { *; }
 
 # Keep service
--keep class com.office.app.PersistentService { *; }
+-keep class com.hairocraft.dialer.PersistentService { *; }

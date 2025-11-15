@@ -1,4 +1,4 @@
-package com.office.app;
+package com.hairocraft.dialer;
 
 import android.content.BroadcastReceiver;
 import android.content.Context;
@@ -12,7 +12,7 @@ public class BootReceiver extends BroadcastReceiver {
     @Override
     public void onReceive(Context context, Intent intent) {
         if (Intent.ACTION_BOOT_COMPLETED.equals(intent.getAction())) {
-            Log.d(TAG, "Boot completed - starting Office App");
+            Log.d(TAG, "Boot completed - starting Hairocraft Dialer");
 
             // Start the main activity
             Intent activityIntent = new Intent(context, MainActivity.class);

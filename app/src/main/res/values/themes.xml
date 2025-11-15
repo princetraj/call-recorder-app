@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Hairocraft Dialer Theme -->
+    <style name="Theme.HairocraftDialer" parent="Theme.AppCompat.Light.DarkActionBar">
+        <!-- Primary brand color -->
+        <item name="colorPrimary">@color/yellow_primary</item>
+        <item name="colorPrimaryDark">@color/black_primary</item>
+        <item name="colorAccent">@color/yellow_dark</item>
+
+        <!-- Status bar color -->
+        <item name="android:statusBarColor">@color/statusBarColor</item>
+
+        <!-- Navigation bar color -->
+        <item name="android:navigationBarColor">@color/navigationBarColor</item>
+
+        <!-- Background colors -->
+        <item name="android:windowBackground">@color/background_primary</item>
+        <item name="android:colorBackground">@color/background_primary</item>
+
+        <!-- Text colors -->
+        <item name="android:textColorPrimary">@color/text_primary</item>
+        <item name="android:textColorSecondary">@color/text_secondary</item>
+
+        <!-- Action bar styling -->
+        <item name="actionBarStyle">@style/HairocraftActionBar</item>
+    </style>
+
+    <!-- Custom Action Bar Style -->
+    <style name="HairocraftActionBar" parent="Widget.AppCompat.ActionBar">
+        <item name="background">@color/yellow_primary</item>
+        <item name="titleTextStyle">@style/HairocraftActionBarTitle</item>
+    </style>
+
+    <!-- Action Bar Title Style -->
+    <style name="HairocraftActionBarTitle" parent="TextAppearance.AppCompat.Widget.ActionBar.Title">
+        <item name="android:textColor">@color/black_primary</item>
+        <item name="android:textSize">20sp</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+</resources>

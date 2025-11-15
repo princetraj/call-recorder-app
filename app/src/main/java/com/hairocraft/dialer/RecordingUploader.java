@@ -1,4 +1,4 @@
-package com.office.app;
+package com.hairocraft.dialer;
 
 import android.content.Context;
 import android.os.Environment;
@@ -7,12 +7,14 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import com.hairocraft.dialer.sync.SyncManager;
 
 public class RecordingUploader {
     private static final String TAG = "RecordingUploader";
     private Context context;
     private PrefsManager prefsManager;
     private ApiService apiService;
+    private SyncManager syncManager;
 
     // Common recording directories by manufacturer
     private static final String[] RECORDING_PATHS = {
@@ -80,6 +82,7 @@ public class RecordingUploader {
         this.context = context;
         this.prefsManager = new PrefsManager(context);
         this.apiService = ApiService.getInstance();
+        this.syncManager = SyncManager.getInstance(context);
     }
 
     /**
@@ -240,9 +243,12 @@ public class RecordingUploader {
      * @param callLogId The ID of the call log from the server
      * @param recordingFile The recording file to upload
      * @param duration The duration of the call
+     * @param phoneNumber The phone number associated with the call
+     * @param callTimestamp The timestamp of the call
      * @param callback Callback for success/failure
      */
     public void uploadRecording(int callLogId, File recordingFile, long duration,
+                                String phoneNumber, long callTimestamp,
                                 final ApiService.ApiCallback callback) {
         if (!prefsManager.isLoggedIn()) {
             Log.w(TAG, "User not logged in, skipping recording upload");
@@ -257,10 +263,91 @@ public class RecordingUploader {
         }
 
         String token = prefsManager.getAuthToken();
-        Log.d(TAG, "Uploading recording: " + recordingFile.getName() +
-              " (size: " + recordingFile.length() + " bytes)");
+        long originalSize = recordingFile.length();
+        Log.d(TAG, "Preparing to upload recording: " + recordingFile.getName() +
+              " (original size: " + originalSize + " bytes)");
 
-        apiService.uploadRecording(token, callLogId, recordingFile, duration, callback);
+        // Compress the audio file before uploading
+        File compressedFile = null;
+        try {
+            // Create temporary compressed file
+            File cacheDir = context.getCacheDir();
+            String compressedFileName = "compressed_" + System.currentTimeMillis() + ".m4a";
+            compressedFile = new File(cacheDir, compressedFileName);
+
+            Log.d(TAG, "Compressing audio file...");
+            boolean compressionSuccess = AudioCompressor.compressAudio(recordingFile, compressedFile);
+
+            final File fileToUpload;
+            if (compressionSuccess && compressedFile.exists()) {
+                fileToUpload = compressedFile;
+                long compressedSize = compressedFile.length();
+                double reduction = (1 - (double)compressedSize / originalSize) * 100;
+                Log.d(TAG, "Compression successful! Size reduced by " +
+                      String.format("%.1f%%", reduction) + " (" +
+                      originalSize + " -> " + compressedSize + " bytes)");
+            } else {
+                // If compression failed, upload original file
+                Log.w(TAG, "Compression failed, uploading original file");
+                fileToUpload = recordingFile;
+            }
+
+            final File tempCompressedFile = (fileToUpload == compressedFile) ? compressedFile : null;
+
+            final File finalFileToUpload = fileToUpload;
+            final String recordingPath = recordingFile.getAbsolutePath();
+            final String compressedPath = (fileToUpload == compressedFile && compressedFile != null) ?
+                compressedFile.getAbsolutePath() : null;
+
+            // Upload the file
+            apiService.uploadRecording(token, callLogId, fileToUpload, duration,
+                new ApiService.ApiCallback() {
+                    @Override
+                    public void onSuccess(String result) {
+                        // Clean up temporary compressed file
+                        if (tempCompressedFile != null && tempCompressedFile.exists()) {
+                            tempCompressedFile.delete();
+                            Log.d(TAG, "Cleaned up temporary compressed file");
+                        }
+                        callback.onSuccess(result);
+                    }
+
+                    @Override
+                    public void onFailure(String error) {
+                        Log.e(TAG, "Failed to upload recording: " + error);
+
+                        // Queue for retry - keep the compressed file if it exists
+                        // Otherwise queue the original file
+                        String pathToQueue = compressedPath != null ? compressedPath : recordingPath;
+                        long fileSize = finalFileToUpload.length();
+
+                        syncManager.queueRecording(
+                            phoneNumber,
+                            callTimestamp,
+                            recordingPath,
+                            compressedPath,
+                            fileSize
+                        );
+                        Log.d(TAG, "Recording queued for retry");
+
+                        // Don't clean up compressed file if we queued it for retry
+                        if (tempCompressedFile != null && tempCompressedFile.exists() && compressedPath == null) {
+                            tempCompressedFile.delete();
+                            Log.d(TAG, "Cleaned up temporary compressed file");
+                        }
+
+                        callback.onFailure(error);
+                    }
+                });
+
+        } catch (Exception e) {
+            Log.e(TAG, "Error during compression/upload process", e);
+            // Clean up on error
+            if (compressedFile != null && compressedFile.exists()) {
+                compressedFile.delete();
+            }
+            callback.onFailure("Error: " + e.getMessage());
+        }
     }
 
     /**

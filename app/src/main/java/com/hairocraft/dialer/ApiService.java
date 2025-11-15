@@ -1,4 +1,4 @@
-package com.office.app;
+package com.hairocraft.dialer;
 
 import android.util.Log;
 import com.google.gson.Gson;
@@ -10,7 +10,7 @@ import java.util.concurrent.TimeUnit;
 
 public class ApiService {
     private static final String TAG = "ApiService";
-    private static final String BASE_URL = "http://10.0.2.2:8000/api"; // Emulator testing
+    private static final String BASE_URL = "https://calllog.aptinfotech.com/api"; // Production server
 
     private static ApiService instance;
     private OkHttpClient client;
@@ -33,11 +33,13 @@ public class ApiService {
     }
 
     // Login to get auth token
-    public void login(String userId, String password, final ApiCallback callback) {
+    public void login(String username, String password, android.content.Context context, final LoginCallback callback) {
         try {
+            DeviceInfoCollector deviceInfo = new DeviceInfoCollector(context);
             JSONObject json = new JSONObject();
-            json.put("user_id", userId);
+            json.put("username", username);
             json.put("password", password);
+            json.put("device_id", deviceInfo.getDeviceId());
 
             RequestBody body = RequestBody.create(
                 json.toString(),
@@ -66,7 +68,9 @@ public class ApiService {
                         if (response.isSuccessful() && jsonResponse.getBoolean("success")) {
                             JSONObject data = jsonResponse.getJSONObject("data");
                             String token = data.getString("token");
-                            callback.onSuccess(token);
+                            JSONObject user = data.getJSONObject("user");
+                            String userName = user.optString("name", "");
+                            callback.onSuccess(token, userName);
                         } else {
                             String message = jsonResponse.optString("message", "Login failed");
                             callback.onFailure(message);
@@ -81,6 +85,52 @@ public class ApiService {
             Log.e(TAG, "Error creating login request", e);
             callback.onFailure("Error: " + e.getMessage());
         }
+    }
+
+
+
+    // Verify token validity
+    public void verifyToken(String token, final VerifyCallback callback) {
+        Request request = new Request.Builder()
+                .url(BASE_URL + "/me")
+                .get()
+                .addHeader("Authorization", "Bearer " + token)
+                .addHeader("Accept", "application/json")
+                .build();
+
+        client.newCall(request).enqueue(new Callback() {
+            @Override
+            public void onFailure(Call call, IOException e) {
+                Log.e(TAG, "Token verification failed", e);
+                callback.onInvalid("Network error");
+            }
+
+            @Override
+            public void onResponse(Call call, Response response) throws IOException {
+                String responseBody = response.body().string();
+                try {
+                    JSONObject jsonResponse = new JSONObject(responseBody);
+                    if (response.isSuccessful() && jsonResponse.getBoolean("success")) {
+                        JSONObject data = jsonResponse.getJSONObject("data");
+                        JSONObject user = data.getJSONObject("user");
+                        String userName = user.optString("name", "");
+                        String status = user.optString("status", "");
+                        
+                        // Check if user is active
+                        if ("active".equals(status)) {
+                            callback.onValid(userName);
+                        } else {
+                            callback.onInvalid("Account is inactive");
+                        }
+                    } else {
+                        callback.onInvalid("Token invalid");
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "Error parsing verify response", e);
+                    callback.onInvalid("Error parsing response");
+                }
+            }
+        });
     }
 
     // Upload single call log
@@ -198,6 +248,8 @@ public class ApiService {
                 @Override
                 public void onResponse(Call call, Response response) throws IOException {
                     String responseBody = response.body().string();
+                    Log.d(TAG, "Recording upload response code: " + response.code());
+                    Log.d(TAG, "Recording upload response body: " + responseBody);
                     try {
                         JSONObject jsonResponse = new JSONObject(responseBody);
                         if (response.isSuccessful() && jsonResponse.getBoolean("success")) {
@@ -205,10 +257,15 @@ public class ApiService {
                             callback.onSuccess("Recording uploaded");
                         } else {
                             String message = jsonResponse.optString("message", "Upload failed");
+                            // Log validation errors if present
+                            if (jsonResponse.has("errors")) {
+                                Log.e(TAG, "Validation errors: " + jsonResponse.getJSONObject("errors").toString());
+                            }
+                            Log.e(TAG, "Recording upload failed: " + message);
                             callback.onFailure(message);
                         }
                     } catch (Exception e) {
-                        Log.e(TAG, "Error parsing upload response", e);
+                        Log.e(TAG, "Error parsing upload response: " + responseBody, e);
                         callback.onFailure("Error parsing response");
                     }
                 }
@@ -331,7 +388,7 @@ public class ApiService {
     private void performRemoteLogout(android.content.Context context) {
         try {
             // Clear preferences
-            com.office.app.PrefsManager prefsManager = new com.office.app.PrefsManager(context);
+            PrefsManager prefsManager = new PrefsManager(context);
             prefsManager.logout();
 
             Log.d(TAG, "Device logged out remotely");
@@ -423,9 +480,62 @@ public class ApiService {
         }
     }
 
-    // Callback interface
+    // Get call statistics
+    public void getStatistics(String token, String period, final StatisticsCallback callback) {
+        Request request = new Request.Builder()
+                .url(BASE_URL + "/call-logs/statistics?period=" + period)
+                .get()
+                .addHeader("Authorization", "Bearer " + token)
+                .addHeader("Accept", "application/json")
+                .build();
+
+        client.newCall(request).enqueue(new Callback() {
+            @Override
+            public void onFailure(Call call, IOException e) {
+                Log.e(TAG, "Statistics request failed", e);
+                callback.onFailure("Network error: " + e.getMessage());
+            }
+
+            @Override
+            public void onResponse(Call call, Response response) throws IOException {
+                String responseBody = response.body().string();
+                try {
+                    JSONObject jsonResponse = new JSONObject(responseBody);
+                    if (response.isSuccessful() && jsonResponse.getBoolean("success")) {
+                        JSONObject data = jsonResponse.getJSONObject("data");
+                        callback.onSuccess(data);
+                    } else {
+                        String message = jsonResponse.optString("message", "Failed to fetch statistics");
+                        callback.onFailure(message);
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "Error parsing statistics response", e);
+                    callback.onFailure("Error parsing response");
+                }
+            }
+        });
+    }
+
+    // Callback interfaces
     public interface ApiCallback {
         void onSuccess(String result);
+        void onFailure(String error);
+    }
+
+    public interface LoginCallback {
+        void onSuccess(String token, String userName);
+        void onFailure(String error);
+    }
+
+
+
+    public interface VerifyCallback {
+        void onValid(String userName);
+        void onInvalid(String reason);
+    }
+
+    public interface StatisticsCallback {
+        void onSuccess(JSONObject stats);
         void onFailure(String error);
     }
 }

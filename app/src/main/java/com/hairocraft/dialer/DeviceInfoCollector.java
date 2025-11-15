@@ -1,7 +1,9 @@
-package com.office.app;
+package com.hairocraft.dialer;
 
+import android.Manifest;
 import android.content.Context;
 import android.content.IntentFilter;
+import android.content.pm.PackageManager;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
 import android.net.wifi.WifiManager;
@@ -11,6 +13,7 @@ import android.provider.Settings;
 import android.telephony.SignalStrength;
 import android.telephony.TelephonyManager;
 import android.telephony.PhoneStateListener;
+import androidx.core.content.ContextCompat;
 
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -222,6 +225,39 @@ public class DeviceInfoCollector {
     }
 
     /**
+     * Check if a specific permission is granted
+     */
+    public boolean isPermissionGranted(String permission) {
+        return ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    /**
+     * Get all permissions status
+     */
+    public JSONObject getPermissionsStatus() {
+        JSONObject permissions = new JSONObject();
+        try {
+            permissions.put("read_call_log", isPermissionGranted(Manifest.permission.READ_CALL_LOG));
+            permissions.put("read_phone_state", isPermissionGranted(Manifest.permission.READ_PHONE_STATE));
+            permissions.put("read_contacts", isPermissionGranted(Manifest.permission.READ_CONTACTS));
+
+            // Android 13+ (API 33+) uses READ_MEDIA_AUDIO instead of READ_EXTERNAL_STORAGE
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                permissions.put("read_external_storage", false);  // Not applicable on Android 13+
+                permissions.put("read_media_audio", isPermissionGranted(Manifest.permission.READ_MEDIA_AUDIO));
+            } else {
+                permissions.put("read_external_storage", isPermissionGranted(Manifest.permission.READ_EXTERNAL_STORAGE));
+                permissions.put("read_media_audio", false);  // Not applicable on Android 12 and below
+            }
+
+            permissions.put("post_notifications", isPermissionGranted(Manifest.permission.POST_NOTIFICATIONS));
+        } catch (JSONException e) {
+            e.printStackTrace();
+        }
+        return permissions;
+    }
+
+    /**
      * Get device status info as JSON
      */
     public JSONObject getDeviceStatusInfo() {
@@ -233,6 +269,7 @@ public class DeviceInfoCollector {
             json.put("signal_strength", getSignalStrength());
             json.put("is_charging", isCharging());
             json.put("app_running_status", "active");
+            json.put("permissions", getPermissionsStatus());
         } catch (JSONException e) {
             e.printStackTrace();
         }

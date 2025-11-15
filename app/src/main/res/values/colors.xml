@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Primary Yellow Colors -->
+    <color name="yellow_primary">#FFD700</color>
+    <color name="yellow_dark">#FFC107</color>
+    <color name="yellow_light">#FFEB3B</color>
+
+    <!-- Black Colors -->
+    <color name="black_primary">#000000</color>
+    <color name="black_light">#212121</color>
+    <color name="black_dark">#000000</color>
+
+    <!-- White Colors -->
+    <color name="white">#FFFFFF</color>
+    <color name="white_smoke">#F5F5F5</color>
+
+    <!-- Theme Colors -->
+    <color name="colorPrimary">#FFD700</color>
+    <color name="colorPrimaryDark">#FFC107</color>
+    <color name="colorAccent">#FFD700</color>
+
+    <!-- Text Colors -->
+    <color name="text_primary">#000000</color>
+    <color name="text_secondary">#212121</color>
+    <color name="text_on_primary">#000000</color>
+
+    <!-- Background Colors -->
+    <color name="background_primary">#FFFFFF</color>
+    <color name="background_secondary">#F5F5F5</color>
+
+    <!-- Status Bar and Navigation Bar -->
+    <color name="statusBarColor">#000000</color>
+    <color name="navigationBarColor">#000000</color>
+</resources>

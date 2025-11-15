@@ -12,14 +12,60 @@
         android:padding="24dp"
         android:gravity="center">
 
+        <ImageView
+            android:layout_width="120dp"
+            android:layout_height="120dp"
+            android:src="@drawable/logo"
+            android:contentDescription="Hairocraft Dialer Logo"
+            android:layout_marginBottom="16dp"
+            android:scaleType="fitCenter" />
+
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Office Call Logger"
+            android:text="Hairocraft Dialer"
             android:textSize="28sp"
             android:textStyle="bold"
             android:textColor="#333333"
             android:layout_marginBottom="32dp" />
+
+        <!-- Permissions Warning Section -->
+        <LinearLayout
+            android:id="@+id/permissions_warning"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="16dp"
+            android:background="#FFF3CD"
+            android:visibility="gone"
+            android:layout_marginBottom="16dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="⚠️ Permissions Required"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                android:textColor="#856404"
+                android:layout_marginBottom="8dp" />
+
+            <TextView
+                android:id="@+id/permissions_message"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Some permissions are missing. The app needs all permissions to function properly."
+                android:textSize="14sp"
+                android:textColor="#856404"
+                android:layout_marginBottom="12dp" />
+
+            <Button
+                android:id="@+id/grant_permissions_button"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Grant Permissions"
+                android:padding="12dp"
+                android:backgroundTint="#FF9800" />
+        </LinearLayout>
 
         <!-- Login Section -->
         <LinearLayout
@@ -32,7 +78,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Login to API"
+                android:text="Login to Dashboard"
                 android:textSize="18sp"
                 android:textStyle="bold"
                 android:textColor="#333333"
@@ -42,8 +88,8 @@
                 android:id="@+id/email_input"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:hint="User ID"
-                android:inputType="number"
+                android:hint="Username"
+                android:inputType="text"
                 android:padding="12dp"
                 android:layout_marginBottom="12dp"
                 android:background="#F5F5F5" />
@@ -75,44 +121,253 @@
                 android:layout_marginTop="12dp" />
         </LinearLayout>
 
-        <!-- Status Section -->
+        <!-- Dashboard Section -->
         <LinearLayout
-            android:id="@+id/status_section"
+            android:id="@+id/dashboard_section"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
             android:visibility="gone">
 
+            <!-- Welcome Message -->
             <TextView
-                android:id="@+id/user_info"
+                android:id="@+id/welcome_text"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Logged in"
-                android:textSize="14sp"
-                android:textColor="#4CAF50"
+                android:text="Welcome"
+                android:textSize="20sp"
+                android:textStyle="bold"
+                android:textColor="#333333"
                 android:textAlignment="center"
-                android:layout_marginBottom="16dp" />
-
-            <TextView
-                android:id="@+id/status_text"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Office App is Running\n\nThis app will automatically:\n• Start on device boot\n• Restart if closed\n• Run in background\n• Upload call logs to API"
-                android:textSize="16sp"
-                android:textColor="#666666"
-                android:textAlignment="center"
-                android:gravity="center"
-                android:lineSpacingExtra="4dp"
                 android:layout_marginBottom="24dp" />
 
+            <!-- Today's Statistics Title -->
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Note: You need to grant call log permissions for the app to work\n\nTo logout, contact your administrator"
+                android:text="Today's Call Statistics"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                android:textColor="#666666"
+                android:layout_marginBottom="16dp" />
+
+            <!-- Stats Grid -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:weightSum="2"
+                android:layout_marginBottom="12dp">
+
+                <!-- Total Calls Card -->
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical"
+                    android:background="#F8F9FA"
+                    android:padding="16dp"
+                    android:layout_marginEnd="6dp"
+                    android:gravity="center">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Total Calls"
+                        android:textSize="12sp"
+                        android:textColor="#666666" />
+
+                    <TextView
+                        android:id="@+id/stat_total"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="0"
+                        android:textSize="32sp"
+                        android:textStyle="bold"
+                        android:textColor="#333333"
+                        android:layout_marginTop="4dp" />
+                </LinearLayout>
+
+                <!-- Incoming Calls Card -->
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical"
+                    android:background="#E8F5E9"
+                    android:padding="16dp"
+                    android:layout_marginStart="6dp"
+                    android:gravity="center">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Incoming"
+                        android:textSize="12sp"
+                        android:textColor="#2E7D32" />
+
+                    <TextView
+                        android:id="@+id/stat_incoming"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="0"
+                        android:textSize="32sp"
+                        android:textStyle="bold"
+                        android:textColor="#2E7D32"
+                        android:layout_marginTop="4dp" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Row 2 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:weightSum="2"
+                android:layout_marginBottom="12dp">
+
+                <!-- Outgoing Calls Card -->
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical"
+                    android:background="#E3F2FD"
+                    android:padding="16dp"
+                    android:layout_marginEnd="6dp"
+                    android:gravity="center">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Outgoing"
+                        android:textSize="12sp"
+                        android:textColor="#1565C0" />
+
+                    <TextView
+                        android:id="@+id/stat_outgoing"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="0"
+                        android:textSize="32sp"
+                        android:textStyle="bold"
+                        android:textColor="#1565C0"
+                        android:layout_marginTop="4dp" />
+                </LinearLayout>
+
+                <!-- Missed Calls Card -->
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical"
+                    android:background="#FFEBEE"
+                    android:padding="16dp"
+                    android:layout_marginStart="6dp"
+                    android:gravity="center">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Missed"
+                        android:textSize="12sp"
+                        android:textColor="#C62828" />
+
+                    <TextView
+                        android:id="@+id/stat_missed"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="0"
+                        android:textSize="32sp"
+                        android:textStyle="bold"
+                        android:textColor="#C62828"
+                        android:layout_marginTop="4dp" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Row 3 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:weightSum="2"
+                android:layout_marginBottom="12dp">
+
+                <!-- Rejected Calls Card -->
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical"
+                    android:background="#F3E5F5"
+                    android:padding="16dp"
+                    android:layout_marginEnd="6dp"
+                    android:gravity="center">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Rejected"
+                        android:textSize="12sp"
+                        android:textColor="#7B1FA2" />
+
+                    <TextView
+                        android:id="@+id/stat_rejected"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="0"
+                        android:textSize="32sp"
+                        android:textStyle="bold"
+                        android:textColor="#7B1FA2"
+                        android:layout_marginTop="4dp" />
+                </LinearLayout>
+
+                <!-- Empty placeholder for alignment -->
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginStart="6dp" />
+            </LinearLayout>
+
+            <!-- Duration Card -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="#FFF3E0"
+                android:padding="16dp"
+                android:layout_marginBottom="16dp">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Total Call Duration"
+                    android:textSize="12sp"
+                    android:textColor="#E65100"
+                    android:textAlignment="center" />
+
+                <TextView
+                    android:id="@+id/stat_duration"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="0m"
+                    android:textSize="24sp"
+                    android:textStyle="bold"
+                    android:textColor="#E65100"
+                    android:textAlignment="center"
+                    android:layout_marginTop="4dp" />
+            </LinearLayout>
+
+            <!-- Note -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="App running in background\nTo logout, contact your administrator"
                 android:textSize="12sp"
                 android:textColor="#999999"
                 android:textAlignment="center"
-                android:layout_marginTop="16dp" />
+                android:layout_marginTop="8dp" />
         </LinearLayout>
 
     </LinearLayout>

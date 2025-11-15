@@ -3,12 +3,12 @@ plugins {
 }
 
 android {
-    namespace 'com.office.app'
+    namespace 'com.hairocraft.dialer'
     compileSdk 34
     buildToolsVersion "34.0.0"
 
     defaultConfig {
-        applicationId "com.office.app"
+        applicationId "com.hairocraft.dialer"
         minSdk 26
         targetSdk 34
         versionCode 1
@@ -32,4 +32,13 @@ dependencies {
     implementation 'androidx.appcompat:appcompat:1.6.1'
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
     implementation 'com.google.code.gson:gson:2.10.1'
+
+    // Room Database
+    def room_version = "2.6.1"
+    implementation "androidx.room:room-runtime:$room_version"
+    annotationProcessor "androidx.room:room-compiler:$room_version"
+
+    // WorkManager for background sync
+    def work_version = "2.9.0"
+    implementation "androidx.work:work-runtime:$work_version"
 }

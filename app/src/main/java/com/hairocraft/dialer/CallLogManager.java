@@ -1,4 +1,4 @@
-package com.office.app;
+package com.hairocraft.dialer;
 
 import android.content.Context;
 import android.database.Cursor;
@@ -11,6 +11,8 @@ import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
 import org.json.JSONObject;
+import com.hairocraft.dialer.sync.SyncManager;
+import com.hairocraft.dialer.sync.SyncScheduler;
 
 public class CallLogManager {
     private static final String TAG = "CallLogManager";
@@ -21,6 +23,7 @@ public class CallLogManager {
     private TelephonyManager telephonyManager;
     private PhoneStateListener phoneStateListener;
     private SimInfoHelper simInfoHelper;
+    private SyncManager syncManager;
     private String lastProcessedNumber = null;
     private long lastProcessedTime = 0;
 
@@ -31,6 +34,7 @@ public class CallLogManager {
         this.recordingUploader = new RecordingUploader(context);
         this.telephonyManager = (TelephonyManager) context.getSystemService(Context.TELEPHONY_SERVICE);
         this.simInfoHelper = new SimInfoHelper(context);
+        this.syncManager = SyncManager.getInstance(context);
     }
 
     public void startListening() {
@@ -38,6 +42,11 @@ public class CallLogManager {
             @Override
             public void onCallStateChanged(int state, String phoneNumber) {
                 super.onCallStateChanged(state, phoneNumber);
+
+                Log.d(TAG, "Call state changed: " + getStateString(state) +
+                      ", Number: " + phoneNumber +
+                      ", lastProcessedNumber: " + lastProcessedNumber +
+                      ", lastProcessedTime: " + lastProcessedTime);
 
                 switch (state) {
                     case TelephonyManager.CALL_STATE_RINGING:
@@ -53,15 +62,22 @@ public class CallLogManager {
                         break;
 
                     case TelephonyManager.CALL_STATE_IDLE:
-                        Log.d(TAG, "Call ended");
-                        // Wait a bit for call log to be written
-                        new android.os.Handler().postDelayed(new Runnable() {
-                            @Override
-                            public void run() {
-                                uploadLatestCallLog();
-                                lastProcessedNumber = null;
-                            }
-                        }, 2000); // Wait 2 seconds
+                        Log.d(TAG, "Call ended - Processing upload");
+
+                        // Only process if we have a tracked call
+                        if (lastProcessedNumber != null) {
+                            Log.d(TAG, "Valid call to process, waiting 2s for call log to be written");
+                            // Wait a bit for call log to be written
+                            new android.os.Handler().postDelayed(new Runnable() {
+                                @Override
+                                public void run() {
+                                    uploadLatestCallLog();
+                                    lastProcessedNumber = null;
+                                }
+                            }, 2000); // Wait 2 seconds
+                        } else {
+                            Log.d(TAG, "No call to process (lastProcessedNumber is null), likely initial IDLE state");
+                        }
                         break;
                 }
             }
@@ -69,6 +85,15 @@ public class CallLogManager {
 
         telephonyManager.listen(phoneStateListener, PhoneStateListener.LISTEN_CALL_STATE);
         Log.d(TAG, "Started listening for call state changes");
+    }
+
+    private String getStateString(int state) {
+        switch (state) {
+            case TelephonyManager.CALL_STATE_IDLE: return "IDLE";
+            case TelephonyManager.CALL_STATE_RINGING: return "RINGING";
+            case TelephonyManager.CALL_STATE_OFFHOOK: return "OFFHOOK";
+            default: return "UNKNOWN(" + state + ")";
+        }
     }
 
     public void stopListening() {
@@ -79,10 +104,17 @@ public class CallLogManager {
     }
 
     private void uploadLatestCallLog() {
+        Log.d(TAG, "uploadLatestCallLog() called - lastProcessedTime: " + lastProcessedTime +
+              ", lastProcessedNumber: " + lastProcessedNumber);
+
         if (!prefsManager.isLoggedIn()) {
             Log.w(TAG, "User not logged in, skipping upload");
             return;
         }
+
+        // Trigger sync of any pending uploads from previous failed attempts
+        Log.d(TAG, "Triggering sync of pending uploads before processing new call");
+        SyncScheduler.triggerImmediateSync(context);
 
         try {
             Cursor cursor = context.getContentResolver().query(
@@ -99,14 +131,25 @@ public class CallLogManager {
                 long duration = cursor.getLong(cursor.getColumnIndex(CallLog.Calls.DURATION));
                 long dateMillis = cursor.getLong(cursor.getColumnIndex(CallLog.Calls.DATE));
 
+                Log.d(TAG, "Latest call from system: Number=" + number +
+                      ", Type=" + getCallType(type) +
+                      ", Duration=" + duration +
+                      ", Timestamp=" + dateMillis);
+
                 // Check if we already processed this call
-                if (dateMillis == lastProcessedTime && number != null && number.equals(lastProcessedNumber)) {
+                boolean timeMatches = (dateMillis == lastProcessedTime);
+                boolean numberMatches = (number != null && number.equals(lastProcessedNumber));
+                Log.d(TAG, "Duplicate check: timeMatches=" + timeMatches +
+                      ", numberMatches=" + numberMatches);
+
+                if (timeMatches && numberMatches) {
                     cursor.close();
-                    Log.d(TAG, "Call already processed, skipping");
+                    Log.w(TAG, "Call already processed, skipping (duplicate detected)");
                     return;
                 }
 
                 lastProcessedTime = dateMillis;
+                Log.d(TAG, "Setting lastProcessedTime to: " + lastProcessedTime);
 
                 String callType = getCallType(type);
                 String callerName = getContactName(number);
@@ -124,6 +167,9 @@ public class CallLogManager {
                 final String finalNumber = number;
                 final long finalDuration = duration;
                 final long finalDateMillis = dateMillis;
+                final String finalCallType = callType;
+                final String finalCallerName = callerName;
+                final JSONObject finalSimInfo = simInfo;
 
                 apiService.uploadCallLog(token, callerName, number, callType, duration, timestamp, simInfo,
                     new ApiService.ApiCallback() {
@@ -149,6 +195,23 @@ public class CallLogManager {
                         @Override
                         public void onFailure(String error) {
                             Log.e(TAG, "Failed to upload call log: " + error);
+
+                            // Queue for retry
+                            String simSlot = finalSimInfo != null ? finalSimInfo.optString("sim_slot_index", null) : null;
+                            String simOperator = finalSimInfo != null ? finalSimInfo.optString("sim_name", null) : null;
+                            String simNumber = finalSimInfo != null ? finalSimInfo.optString("sim_number", null) : null;
+
+                            syncManager.queueCallLog(
+                                finalNumber,
+                                finalCallType,
+                                finalDuration,
+                                finalDateMillis,
+                                finalCallerName,
+                                simSlot,
+                                simOperator,
+                                simNumber
+                            );
+                            Log.d(TAG, "Call log queued for retry");
 
                             // Still update device status even if call log upload failed
                             updateDeviceStatusAfterCall(token);
@@ -260,6 +323,7 @@ public class CallLogManager {
                     if (recordingFile != null) {
                         Log.d(TAG, "Found recording: " + recordingFile.getAbsolutePath());
                         recordingUploader.uploadRecording(callLogId, recordingFile, duration,
+                            phoneNumber, callTimestamp,
                             new ApiService.ApiCallback() {
                                 @Override
                                 public void onSuccess(String result) {
@@ -269,6 +333,7 @@ public class CallLogManager {
                                 @Override
                                 public void onFailure(String error) {
                                     Log.e(TAG, "Failed to upload recording: " + error);
+                                    // Already queued for retry in RecordingUploader
                                 }
                             });
                     } else {
