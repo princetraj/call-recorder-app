@@ -10,6 +10,7 @@ public class PrefsManager {
     private static final String KEY_USER_ID = "user_id";
     private static final String KEY_USER_NAME = "user_name";
     private static final String KEY_IS_LOGGED_IN = "is_logged_in";
+    private static final String KEY_LAST_PROCESSED_CALL_TIME = "last_processed_call_time";
 
     private SharedPreferences prefs;
     private SharedPreferences.Editor editor;
@@ -65,5 +66,22 @@ public class PrefsManager {
     public void logout() {
         editor.clear();
         editor.apply();
+    }
+
+    /**
+     * Save the timestamp of the last successfully processed call log
+     * This ensures we don't process the same call multiple times
+     */
+    public void saveLastProcessedCallTime(long timestamp) {
+        editor.putLong(KEY_LAST_PROCESSED_CALL_TIME, timestamp);
+        editor.apply();
+    }
+
+    /**
+     * Get the timestamp of the last processed call log
+     * Returns 0 if no calls have been processed yet
+     */
+    public long getLastProcessedCallTime() {
+        return prefs.getLong(KEY_LAST_PROCESSED_CALL_TIME, 0);
     }
 }

@@ -16,6 +16,7 @@ import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
 import com.hairocraft.dialer.sync.SyncScheduler;
+import com.hairocraft.dialer.sync.SyncManager;
 
 public class PersistentService extends Service {
 
@@ -29,6 +30,8 @@ public class PersistentService extends Service {
     private DeviceInfoCollector deviceInfoCollector;
     private CallStateListener callStateListener;
     private TelephonyManager telephonyManager;
+    // PHASE 3.1: SyncManager for ContentObserver management
+    private SyncManager syncManager;
 
     @Override
     public void onCreate() {
@@ -49,12 +52,24 @@ public class PersistentService extends Service {
         telephonyManager = (TelephonyManager) getSystemService(Context.TELEPHONY_SERVICE);
         callStateListener = new CallStateListener(this);
         if (telephonyManager != null) {
-            telephonyManager.listen(callStateListener, PhoneStateListener.LISTEN_CALL_STATE);
+            // Check if we have the required permission before listening
+            if (checkSelfPermission(android.Manifest.permission.READ_PHONE_STATE)
+                    == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                telephonyManager.listen(callStateListener, PhoneStateListener.LISTEN_CALL_STATE);
+                android.util.Log.d("PersistentService", "Call state listener registered");
+            } else {
+                android.util.Log.w("PersistentService", "READ_PHONE_STATE permission not granted, call state listener not registered");
+            }
         }
 
         // Schedule periodic sync for failed uploads
         SyncScheduler.schedulePeriodicSync(this);
         android.util.Log.d("PersistentService", "Sync scheduler initialized");
+
+        // PHASE 3.1: Start MediaStore ContentObserver for immediate recording detection
+        syncManager = SyncManager.getInstance(this);
+        syncManager.startRecordingObserver();
+        android.util.Log.d("PersistentService", "Recording ContentObserver started");
     }
 
     @Override
@@ -106,6 +121,12 @@ public class PersistentService extends Service {
         // Stop call state listener
         if (telephonyManager != null && callStateListener != null) {
             telephonyManager.listen(callStateListener, PhoneStateListener.LISTEN_NONE);
+        }
+
+        // PHASE 3.1: Stop MediaStore ContentObserver
+        if (syncManager != null) {
+            syncManager.stopRecordingObserver();
+            android.util.Log.d("PersistentService", "Recording ContentObserver stopped");
         }
 
         // Broadcast to restart the service
@@ -175,7 +196,8 @@ public class PersistentService extends Service {
         }
 
         ApiService apiService = ApiService.getInstance();
-        apiService.updateDeviceStatus(token, deviceInfoCollector.getDeviceStatusInfo(),
+        // IMPORTANT: Pass context to enable remote logout handling from admin panel
+        apiService.updateDeviceStatus(token, deviceInfoCollector.getDeviceStatusInfo(), this,
             new ApiService.ApiCallback() {
                 @Override
                 public void onSuccess(String result) {

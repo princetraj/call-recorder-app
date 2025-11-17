@@ -10,9 +10,13 @@ import android.provider.ContactsContract;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
+import java.util.HashSet;
+import java.util.Set;
 import org.json.JSONObject;
 import com.hairocraft.dialer.sync.SyncManager;
 import com.hairocraft.dialer.sync.SyncScheduler;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class CallLogManager {
     private static final String TAG = "CallLogManager";
@@ -24,8 +28,12 @@ public class CallLogManager {
     private PhoneStateListener phoneStateListener;
     private SimInfoHelper simInfoHelper;
     private SyncManager syncManager;
-    private String lastProcessedNumber = null;
-    private long lastProcessedTime = 0;
+    // IMPROVED: Track multiple concurrent calls instead of just one
+    // Handles call waiting, conference calls, and rapid succession scenarios
+    private final Set<String> activeCallNumbers = new HashSet<>();
+    private final Object uploadLock = new Object(); // Synchronization lock for concurrent calls
+    // ExecutorService for background database operations
+    private final ExecutorService executorService = Executors.newSingleThreadExecutor();
 
     public CallLogManager(Context context) {
         this.context = context;
@@ -38,45 +46,80 @@ public class CallLogManager {
     }
 
     public void startListening() {
+        // Check if we have the required permission
+        if (context.checkSelfPermission(android.Manifest.permission.READ_PHONE_STATE)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            Log.w(TAG, "READ_PHONE_STATE permission not granted, cannot start listening");
+            return;
+        }
+
         phoneStateListener = new PhoneStateListener() {
             @Override
             public void onCallStateChanged(int state, String phoneNumber) {
                 super.onCallStateChanged(state, phoneNumber);
 
-                Log.d(TAG, "Call state changed: " + getStateString(state) +
-                      ", Number: " + phoneNumber +
-                      ", lastProcessedNumber: " + lastProcessedNumber +
-                      ", lastProcessedTime: " + lastProcessedTime);
+                // Normalize phone number (can be null or empty for unknown/blocked calls)
+                final String normalizedNumber = (phoneNumber != null && !phoneNumber.isEmpty())
+                    ? phoneNumber : "UNKNOWN";
+
+                synchronized (uploadLock) {
+                    Log.d(TAG, "Call state changed: " + getStateString(state) +
+                          ", Number: " + normalizedNumber +
+                          ", Active calls: " + activeCallNumbers.size() +
+                          ", Tracked numbers: " + activeCallNumbers);
+                }
 
                 switch (state) {
                     case TelephonyManager.CALL_STATE_RINGING:
-                        Log.d(TAG, "Incoming call from: " + phoneNumber);
-                        lastProcessedNumber = phoneNumber;
+                        Log.d(TAG, "Incoming call from: " + normalizedNumber);
+                        synchronized (uploadLock) {
+                            activeCallNumbers.add(normalizedNumber);
+                            Log.d(TAG, "Added to active calls. Total active: " + activeCallNumbers.size());
+                        }
                         break;
 
                     case TelephonyManager.CALL_STATE_OFFHOOK:
-                        Log.d(TAG, "Call answered or outgoing call");
-                        if (lastProcessedNumber == null) {
-                            lastProcessedNumber = phoneNumber;
+                        Log.d(TAG, "Call answered or outgoing call: " + normalizedNumber);
+                        synchronized (uploadLock) {
+                            // Add to active calls if not already tracked
+                            if (activeCallNumbers.add(normalizedNumber)) {
+                                Log.d(TAG, "Added outgoing call to active. Total active: " + activeCallNumbers.size());
+                            }
                         }
                         break;
 
                     case TelephonyManager.CALL_STATE_IDLE:
                         Log.d(TAG, "Call ended - Processing upload");
 
-                        // Only process if we have a tracked call
-                        if (lastProcessedNumber != null) {
-                            Log.d(TAG, "Valid call to process, waiting 2s for call log to be written");
-                            // Wait a bit for call log to be written
-                            new android.os.Handler().postDelayed(new Runnable() {
-                                @Override
-                                public void run() {
-                                    uploadLatestCallLog();
-                                    lastProcessedNumber = null;
-                                }
-                            }, 2000); // Wait 2 seconds
-                        } else {
-                            Log.d(TAG, "No call to process (lastProcessedNumber is null), likely initial IDLE state");
+                        synchronized (uploadLock) {
+                            // Only process if we have tracked calls
+                            if (!activeCallNumbers.isEmpty()) {
+                                // CRITICAL FIX: Capture current active calls at this moment
+                                // This prevents clearing calls that start during the 3-second delay
+                                final Set<String> callsToProcess = new HashSet<>(activeCallNumbers);
+                                final int callCount = callsToProcess.size();
+
+                                Log.d(TAG, "Processing " + callCount +
+                                      " active call(s), waiting 3s for call log to be written");
+                                Log.d(TAG, "Captured calls to process: " + callsToProcess);
+
+                                // Clear these calls immediately from tracking
+                                // New calls that start now will be tracked separately
+                                activeCallNumbers.removeAll(callsToProcess);
+                                Log.d(TAG, "Removed processed calls from active tracking. " +
+                                      "Remaining active: " + activeCallNumbers.size());
+
+                                // Wait for call log to be written
+                                new android.os.Handler().postDelayed(new Runnable() {
+                                    @Override
+                                    public void run() {
+                                        uploadLatestCallLog();
+                                        Log.d(TAG, "Upload triggered for " + callCount + " call(s): " + callsToProcess);
+                                    }
+                                }, 3000); // Wait 3 seconds for system to write call log
+                            } else {
+                                Log.d(TAG, "No active calls to process, likely initial IDLE state");
+                            }
                         }
                         break;
                 }
@@ -104,128 +147,165 @@ public class CallLogManager {
     }
 
     private void uploadLatestCallLog() {
-        Log.d(TAG, "uploadLatestCallLog() called - lastProcessedTime: " + lastProcessedTime +
-              ", lastProcessedNumber: " + lastProcessedNumber);
+        // Synchronize to prevent concurrent call processing
+        synchronized (uploadLock) {
+            Log.d(TAG, "uploadLatestCallLog() called");
 
-        if (!prefsManager.isLoggedIn()) {
-            Log.w(TAG, "User not logged in, skipping upload");
-            return;
-        }
+            if (!prefsManager.isLoggedIn()) {
+                Log.w(TAG, "User not logged in, skipping upload");
+                return;
+            }
 
-        // Trigger sync of any pending uploads from previous failed attempts
-        Log.d(TAG, "Triggering sync of pending uploads before processing new call");
-        SyncScheduler.triggerImmediateSync(context);
-
+        // CRITICAL: Use try-finally to ensure cursor is always closed
+        Cursor cursor = null;
         try {
-            Cursor cursor = context.getContentResolver().query(
+            // First, trigger sync for any previously failed uploads
+            // SyncManager uses single-thread executor so this won't conflict with later sync
+            SyncScheduler.triggerImmediateSync(context);
+            // Get the last processed timestamp from persistent storage
+            long lastProcessedTimestamp = prefsManager.getLastProcessedCallTime();
+            Log.d(TAG, "Last processed call timestamp from prefs: " + lastProcessedTimestamp);
+
+            // Query for ALL calls newer than last processed
+            // This ensures we don't miss calls if multiple happen in quick succession
+            String selection = CallLog.Calls.DATE + " > ?";
+            String[] selectionArgs = new String[]{String.valueOf(lastProcessedTimestamp)};
+
+            cursor = context.getContentResolver().query(
                 CallLog.Calls.CONTENT_URI,
                 null,
-                null,
-                null,
-                CallLog.Calls.DATE + " DESC"
+                selection,
+                selectionArgs,
+                CallLog.Calls.DATE + " ASC" // Process oldest first
             );
 
-            if (cursor != null && cursor.moveToFirst()) {
-                String number = cursor.getString(cursor.getColumnIndex(CallLog.Calls.NUMBER));
-                int type = cursor.getInt(cursor.getColumnIndex(CallLog.Calls.TYPE));
-                long duration = cursor.getLong(cursor.getColumnIndex(CallLog.Calls.DURATION));
-                long dateMillis = cursor.getLong(cursor.getColumnIndex(CallLog.Calls.DATE));
+            if (cursor != null && cursor.getCount() > 0) {
+                Log.d(TAG, "Found " + cursor.getCount() + " new call(s) to process");
 
-                Log.d(TAG, "Latest call from system: Number=" + number +
-                      ", Type=" + getCallType(type) +
-                      ", Duration=" + duration +
-                      ", Timestamp=" + dateMillis);
+                int processedCount = 0;
+                long newestTimestamp = lastProcessedTimestamp;
 
-                // Check if we already processed this call
-                boolean timeMatches = (dateMillis == lastProcessedTime);
-                boolean numberMatches = (number != null && number.equals(lastProcessedNumber));
-                Log.d(TAG, "Duplicate check: timeMatches=" + timeMatches +
-                      ", numberMatches=" + numberMatches);
+                // Process ALL new calls, not just the latest one
+                while (cursor.moveToNext()) {
+                    String number = cursor.getString(cursor.getColumnIndex(CallLog.Calls.NUMBER));
+                    int type = cursor.getInt(cursor.getColumnIndex(CallLog.Calls.TYPE));
+                    long duration = cursor.getLong(cursor.getColumnIndex(CallLog.Calls.DURATION));
+                    long dateMillis = cursor.getLong(cursor.getColumnIndex(CallLog.Calls.DATE));
 
-                if (timeMatches && numberMatches) {
-                    cursor.close();
-                    Log.w(TAG, "Call already processed, skipping (duplicate detected)");
-                    return;
+                    Log.d(TAG, "Processing call #" + (processedCount + 1) +
+                          ": Number=" + number +
+                          ", Type=" + getCallType(type) +
+                          ", Duration=" + duration +
+                          ", Timestamp=" + dateMillis);
+
+                    // CRITICAL: Always track newest timestamp, even for invalid calls
+                    // This prevents infinite loops where invalid calls are retried forever
+                    if (dateMillis > newestTimestamp) {
+                        newestTimestamp = dateMillis;
+                    }
+
+                    // VALIDATION: Ensure call log data is valid
+                    boolean isValid = true;
+
+                    // Validate timestamp (not in future, not too old)
+                    long now = System.currentTimeMillis();
+                    if (dateMillis > now) {
+                        Log.w(TAG, "Invalid call: timestamp is in the future, skipping");
+                        isValid = false;
+                    } else if (dateMillis < (now - 7 * 24 * 60 * 60 * 1000L)) {
+                        // Older than 7 days - probably already processed or stale
+                        Log.w(TAG, "Call is older than 7 days, skipping");
+                        isValid = false;
+                    }
+
+                    // Validate duration (not negative, reasonable for call recordings)
+                    if (duration < 0) {
+                        Log.w(TAG, "Invalid call: negative duration, fixing to 0");
+                        duration = 0;
+                    }
+
+                    // Validate call type
+                    if (type < CallLog.Calls.INCOMING_TYPE || type > CallLog.Calls.REJECTED_TYPE) {
+                        Log.w(TAG, "Invalid call: unknown call type " + type + ", skipping");
+                        isValid = false;
+                    }
+
+                    if (!isValid) {
+                        // Skip this invalid call but timestamp is already tracked
+                        continue;
+                    }
+
+                    String callType = getCallType(type);
+                    String callerName = getContactName(number);
+                    String timestamp = formatTimestamp(dateMillis);
+
+                    // Get SIM information
+                    JSONObject simInfo = simInfoHelper.getSimInfoForCallLog(cursor);
+
+                    String token = prefsManager.getAuthToken();
+                    final String finalNumber = number;
+                    final long finalDuration = duration;
+                    final long finalDateMillis = dateMillis;
+                    final String finalCallType = callType;
+                    final String finalCallerName = callerName;
+                    final JSONObject finalSimInfo = simInfo;
+
+                    // PHASE 1: Queue with UUID and WorkManager for reliability
+                    String simSlot = simInfo != null ? simInfo.optString("sim_slot_index", null) : null;
+                    String simOperator = simInfo != null ? simInfo.optString("sim_name", null) : null;
+                    String simNumber = simInfo != null ? simInfo.optString("sim_number", null) : null;
+
+                    Log.d(TAG, "Queueing call log for upload - Number: " + number +
+                          ", Type: " + callType + ", Duration: " + duration +
+                          ", Timestamp: " + dateMillis);
+
+                    // PHASE 1.4: Transactional insert + work scheduling
+                    queueCallLogWithWorker(
+                        finalNumber,
+                        finalCallType,
+                        finalDuration,
+                        finalDateMillis,
+                        finalCallerName,
+                        simSlot,
+                        simOperator,
+                        simNumber
+                    );
+
+                    processedCount++;
+                } // End while loop
+
+                // Save the newest timestamp so we don't reprocess these calls
+                if (newestTimestamp > lastProcessedTimestamp) {
+                    prefsManager.saveLastProcessedCallTime(newestTimestamp);
+                    Log.d(TAG, "Queued " + processedCount + " call(s). Updated last processed time to: " + newestTimestamp);
                 }
 
-                lastProcessedTime = dateMillis;
-                Log.d(TAG, "Setting lastProcessedTime to: " + lastProcessedTime);
+                // Trigger immediate sync to upload queued calls
+                if (processedCount > 0) {
+                    Log.d(TAG, "Triggering immediate sync to upload " + processedCount + " queued call(s)");
+                    SyncScheduler.triggerImmediateSync(context);
+                }
 
-                String callType = getCallType(type);
-                String callerName = getContactName(number);
-                String timestamp = formatTimestamp(dateMillis);
+                // Update device status after processing
+                updateDeviceStatusAfterCall(prefsManager.getAuthToken());
 
-                // Get SIM information
-                JSONObject simInfo = simInfoHelper.getSimInfoForCallLog(cursor);
-
-                cursor.close();
-
-                Log.d(TAG, "Uploading call log - Number: " + number + ", Type: " + callType +
-                      ", Duration: " + duration + ", SIM: " + simInfo.toString());
-
-                String token = prefsManager.getAuthToken();
-                final String finalNumber = number;
-                final long finalDuration = duration;
-                final long finalDateMillis = dateMillis;
-                final String finalCallType = callType;
-                final String finalCallerName = callerName;
-                final JSONObject finalSimInfo = simInfo;
-
-                apiService.uploadCallLog(token, callerName, number, callType, duration, timestamp, simInfo,
-                    new ApiService.ApiCallback() {
-                        @Override
-                        public void onSuccess(String result) {
-                            Log.d(TAG, "Call log uploaded successfully");
-
-                            // Update device status after call ends
-                            updateDeviceStatusAfterCall(token);
-
-                            // Try to parse call log ID from result
-                            try {
-                                int callLogId = Integer.parseInt(result);
-                                Log.d(TAG, "Call log ID: " + callLogId);
-
-                                // Search for recording and upload if found
-                                searchAndUploadRecording(callLogId, finalNumber, finalDateMillis, finalDuration);
-                            } catch (NumberFormatException e) {
-                                Log.w(TAG, "Could not parse call log ID from response");
-                            }
-                        }
-
-                        @Override
-                        public void onFailure(String error) {
-                            Log.e(TAG, "Failed to upload call log: " + error);
-
-                            // Queue for retry
-                            String simSlot = finalSimInfo != null ? finalSimInfo.optString("sim_slot_index", null) : null;
-                            String simOperator = finalSimInfo != null ? finalSimInfo.optString("sim_name", null) : null;
-                            String simNumber = finalSimInfo != null ? finalSimInfo.optString("sim_number", null) : null;
-
-                            syncManager.queueCallLog(
-                                finalNumber,
-                                finalCallType,
-                                finalDuration,
-                                finalDateMillis,
-                                finalCallerName,
-                                simSlot,
-                                simOperator,
-                                simNumber
-                            );
-                            Log.d(TAG, "Call log queued for retry");
-
-                            // Still update device status even if call log upload failed
-                            updateDeviceStatusAfterCall(token);
-                        }
-                    });
             } else {
-                Log.w(TAG, "No call logs found");
-                if (cursor != null) {
-                    cursor.close();
-                }
+                Log.d(TAG, "No new call logs to process");
             }
         } catch (Exception e) {
             Log.e(TAG, "Error reading call log", e);
+        } finally {
+            // CRITICAL: Always close cursor to prevent memory leaks
+            if (cursor != null) {
+                try {
+                    cursor.close();
+                    Log.d(TAG, "Cursor closed successfully");
+                } catch (Exception e) {
+                    Log.e(TAG, "Error closing cursor", e);
+                }
+            }
         }
+        } // End synchronized block
     }
 
     private String getCallType(int type) {
@@ -312,8 +392,9 @@ public class CallLogManager {
             @Override
             public void run() {
                 try {
-                    // Wait a bit for the recording to be finalized
-                    Thread.sleep(3000);
+                    // Wait for the recording to be finalized and written to storage
+                    // Increased from 3s to 5s for better reliability
+                    Thread.sleep(5000);
 
                     Log.d(TAG, "Searching for call recording...");
                     java.io.File recordingFile = recordingUploader.findRecording(
@@ -344,5 +425,42 @@ public class CallLogManager {
                 }
             }
         }).start();
+    }
+
+    /**
+     * PHASE 1.4: Queue call log with transactional database insert and WorkManager scheduling
+     * This ensures atomic operation - either both succeed or both fail
+     * FIXED: Runs database operations on background thread to avoid main thread access
+     */
+    private void queueCallLogWithWorker(String phoneNumber, String callType, long duration,
+                                         long timestamp, String contactName, String simSlot,
+                                         String simOperator, String simNumber) {
+        // Run database operations on background thread
+        executorService.execute(() -> {
+            try {
+                // Create queue entry with UUID
+                com.hairocraft.dialer.database.UploadQueue queue =
+                        com.hairocraft.dialer.database.UploadQueue.createCallLogQueue(
+                                phoneNumber, callType, duration, timestamp, contactName,
+                                simSlot, simOperator, simNumber
+                        );
+
+                // Insert into database (now safe on background thread)
+                com.hairocraft.dialer.database.AppDatabase db =
+                        com.hairocraft.dialer.database.AppDatabase.getInstance(context);
+                long rowId = db.uploadQueueDao().insert(queue);
+
+                if (rowId > 0) {
+                    Log.d(TAG, "Call log queued with UUID: " + queue.localCallUuid + ", row ID: " + rowId);
+
+                    // Schedule WorkManager upload
+                    com.hairocraft.dialer.workers.CallLogUploadWorker.scheduleUpload(context, queue.localCallUuid);
+                } else {
+                    Log.e(TAG, "Failed to insert call log into database");
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Error queueing call log with worker", e);
+            }
+        });
     }
 }

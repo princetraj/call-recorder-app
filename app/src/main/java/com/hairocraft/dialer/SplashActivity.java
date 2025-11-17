@@ -72,46 +72,13 @@ public class SplashActivity extends Activity {
 
     private void checkLoginStatus() {
         if (prefsManager.isLoggedIn()) {
-            // User is logged in, verify token
-            String token = prefsManager.getAuthToken();
-            if (token != null && !token.isEmpty()) {
-                verifyToken(token);
-            } else {
-                // No token, go to login
-                navigateToMain();
-            }
+            // User is logged in, trust the local token
+            // Remote logout will be handled via periodic status updates
+            navigateToMain();
         } else {
             // Not logged in, go to main (will show login screen)
             navigateToMain();
         }
-    }
-
-    private void verifyToken(String token) {
-        apiService.verifyToken(token, new ApiService.VerifyCallback() {
-            @Override
-            public void onValid(String userName) {
-                runOnUiThread(new Runnable() {
-                    @Override
-                    public void run() {
-                        // Token is valid, update user name and navigate
-                        prefsManager.saveUserName(userName);
-                        navigateToMain();
-                    }
-                });
-            }
-
-            @Override
-            public void onInvalid(String reason) {
-                runOnUiThread(new Runnable() {
-                    @Override
-                    public void run() {
-                        // Token is invalid, clear login and navigate
-                        prefsManager.logout();
-                        navigateToMain();
-                    }
-                });
-            }
-        });
     }
 
     private void navigateToMain() {

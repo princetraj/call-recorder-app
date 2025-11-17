@@ -11,15 +11,13 @@ public class RestartReceiver extends BroadcastReceiver {
 
     @Override
     public void onReceive(Context context, Intent intent) {
-        Log.d(TAG, "Service destroyed - restarting app");
+        Log.d(TAG, "Service destroyed - restarting service");
 
-        // Restart the main activity
-        Intent activityIntent = new Intent(context, MainActivity.class);
-        activityIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        context.startActivity(activityIntent);
-
-        // Restart the foreground service
+        // Only restart the foreground service, not the activity
+        // This keeps the app running in background without showing UI
         Intent serviceIntent = new Intent(context, PersistentService.class);
         context.startForegroundService(serviceIntent);
+
+        Log.d(TAG, "PersistentService restarted in background");
     }
 }

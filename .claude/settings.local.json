@@ -10,7 +10,11 @@
       "Bash(dir:*)",
       "Bash(for:*)",
       "Bash(do sed -i 's/package com\\.office\\.app;/package com.hairocraft.dialer;/g' \"$file\")",
-      "Bash(done)"
+      "Bash(done)",
+      "Bash(gradlew assembleDebug:*)",
+      "Bash(./gradlew.bat assembleDebug)",
+      "Bash(ipconfig:*)",
+      "Bash(findstr:*)"
     ],
     "deny": [],
     "ask": []

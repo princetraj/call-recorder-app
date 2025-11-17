@@ -468,6 +468,8 @@ public class MainActivity extends Activity {
                         prefsManager.saveAuthToken(token);
                         prefsManager.saveUserId(username);
                         prefsManager.saveUserName(userName);
+                        // Set timestamp to now so only future calls are uploaded
+                        prefsManager.saveLastProcessedCallTime(System.currentTimeMillis());
                         loginStatus.setText("Login successful!");
                         emailInput.setText("");
                         passwordInput.setText("");

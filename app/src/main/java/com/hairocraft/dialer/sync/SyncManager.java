@@ -9,8 +9,6 @@ import com.hairocraft.dialer.database.AppDatabase;
 import com.hairocraft.dialer.database.UploadQueue;
 import com.hairocraft.dialer.database.UploadQueueDao;
 
-import org.json.JSONObject;
-
 import java.io.File;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -26,6 +24,10 @@ public class SyncManager {
     private ApiService apiService;
     private PrefsManager prefsManager;
     private ExecutorService executorService;
+    private com.hairocraft.dialer.RecordingUploader recordingUploader;
+
+    // PHASE 3.1: ContentObserver for immediate recording detection
+    private RecordingContentObserver recordingObserver;
 
     private SyncManager(Context context) {
         this.context = context.getApplicationContext();
@@ -34,6 +36,13 @@ public class SyncManager {
         this.apiService = ApiService.getInstance();
         this.prefsManager = new PrefsManager(context);
         this.executorService = Executors.newSingleThreadExecutor();
+        this.recordingUploader = new com.hairocraft.dialer.RecordingUploader(context);
+
+        // PHASE 3.1: Initialize ContentObserver for recording detection
+        this.recordingObserver = null; // Initialized on demand via startRecordingObserver()
+
+        // PHASE 3.3: Log time information on initialization
+        TimeUtils.logTimeInfo();
     }
 
     public static synchronized SyncManager getInstance(Context context) {
@@ -43,57 +52,38 @@ public class SyncManager {
         return instance;
     }
 
-    /**
-     * Add a call log to the upload queue
-     */
-    public void queueCallLog(String phoneNumber, String callType, long duration, long timestamp,
-                              String contactName, String simSlot, String simOperator, String simNumber) {
-        Log.d(TAG, "queueCallLog() called for: " + phoneNumber + ", timestamp=" + timestamp);
-        executorService.execute(() -> {
-            try {
-                // Check if already queued
-                UploadQueue existing = queueDao.findCallLog(phoneNumber, timestamp);
-                if (existing == null) {
-                    UploadQueue queue = UploadQueue.createCallLogQueue(
-                            phoneNumber, callType, duration, timestamp,
-                            contactName, simSlot, simOperator, simNumber
-                    );
-                    long id = queueDao.insert(queue);
-                    Log.d(TAG, "Successfully queued call log with ID: " + id +
-                          ", Status=" + queue.status +
-                          ", NextRetryAt=" + queue.nextRetryAt);
-
-                    // Verify it was inserted
-                    int totalPending = queueDao.getPendingCount();
-                    Log.d(TAG, "Total pending/failed uploads in database: " + totalPending);
-                } else {
-                    Log.d(TAG, "Call log already queued (ID=" + existing.id +
-                          ", Status=" + existing.status + "), skipping duplicate");
-                }
-            } catch (Exception e) {
-                Log.e(TAG, "Error queueing call log", e);
-                e.printStackTrace();
-            }
-        });
-    }
+    // REMOVED: queueCallLog() method
+    // Call logs are now handled by CallLogUploadWorker via WorkManager
+    // This old method was causing duplicate uploads
 
     /**
      * Add a recording to the upload queue
+     * IMPROVED: Uses time window for duplicate detection
+     * PHASE 1.1: Now accepts parentUuid to link with call log
      */
-    public void queueRecording(String phoneNumber, long callTimestamp, String recordingPath,
+    public void queueRecording(int callLogId, String parentUuid, String phoneNumber,
+                                long callTimestamp, String recordingPath,
                                 String compressedPath, long fileSize) {
         executorService.execute(() -> {
             try {
-                // Check if already queued
-                UploadQueue existing = queueDao.findRecording(phoneNumber, callTimestamp);
+                // IMPROVED: Check if already queued within ±1 second window
+                long timestampStart = callTimestamp - 1000; // -1 second
+                long timestampEnd = callTimestamp + 1000;   // +1 second
+                UploadQueue existing = queueDao.findRecordingWithinWindow(
+                    phoneNumber, timestampStart, timestampEnd
+                );
+
                 if (existing == null) {
                     UploadQueue queue = UploadQueue.createRecordingQueue(
-                            phoneNumber, callTimestamp, recordingPath, compressedPath, fileSize
+                            callLogId, parentUuid, phoneNumber, callTimestamp,
+                            recordingPath, compressedPath, fileSize
                     );
                     long id = queueDao.insert(queue);
-                    Log.d(TAG, "Queued recording with ID: " + id);
+                    Log.d(TAG, "Queued recording with UUID: " + parentUuid +
+                          ", ID: " + id + ", call_log_id=" + callLogId);
                 } else {
-                    Log.d(TAG, "Recording already queued, skipping");
+                    Log.d(TAG, "Recording already queued within time window (ID=" + existing.id +
+                          ", Timestamp diff=" + (callTimestamp - existing.callTimestamp) + "ms), skipping");
                 }
             } catch (Exception e) {
                 Log.e(TAG, "Error queueing recording", e);
@@ -139,6 +129,13 @@ public class SyncManager {
                 int failureCount = 0;
 
                 for (UploadQueue upload : pendingUploads) {
+                    // IMPORTANT: Skip call logs - they are now handled by CallLogUploadWorker
+                    // This prevents duplicate uploads (SyncManager vs WorkManager)
+                    if ("call_log".equals(upload.uploadType)) {
+                        Log.d(TAG, "Skipping call_log upload (handled by CallLogUploadWorker): " + upload.id);
+                        continue;
+                    }
+
                     // Update status to uploading
                     upload.status = "uploading";
                     queueDao.update(upload);
@@ -181,14 +178,15 @@ public class SyncManager {
 
     /**
      * Process a single upload from the queue
+     * NOTE: Only handles recordings now. Call logs are handled by CallLogUploadWorker.
      */
     private boolean processUpload(UploadQueue upload, String token) {
         try {
-            if ("call_log".equals(upload.uploadType)) {
-                return uploadCallLogSync(upload, token);
-            } else if ("recording".equals(upload.uploadType)) {
+            if ("recording".equals(upload.uploadType)) {
                 return uploadRecordingSync(upload, token);
             }
+            // Call logs should never reach here (filtered out in syncPendingUploads)
+            Log.w(TAG, "Unexpected upload type: " + upload.uploadType);
             return false;
         } catch (Exception e) {
             Log.e(TAG, "Error processing upload: " + upload.id, e);
@@ -197,63 +195,12 @@ public class SyncManager {
         }
     }
 
-    /**
-     * Upload call log synchronously
-     */
-    private boolean uploadCallLogSync(UploadQueue upload, String token) {
-        final boolean[] success = {false};
-        final Object lock = new Object();
+    // REMOVED: uploadCallLogSync() method
+    // Call log uploads now handled by CallLogUploadWorker via WorkManager
+    // This eliminates duplicate uploads and improves reliability
 
-        try {
-            // Build SIM info JSON
-            JSONObject simInfo = new JSONObject();
-            if (upload.simSlot != null) simInfo.put("sim_slot_index", upload.simSlot);
-            if (upload.simOperator != null) simInfo.put("sim_name", upload.simOperator);
-            if (upload.simNumber != null) simInfo.put("sim_number", upload.simNumber);
-
-            // Convert timestamp to ISO format
-            String timestamp = String.valueOf(upload.callTimestamp);
-
-            apiService.uploadCallLog(
-                    token,
-                    upload.contactName,
-                    upload.phoneNumber,
-                    upload.callType,
-                    upload.callDuration,
-                    timestamp,
-                    simInfo,
-                    new ApiService.ApiCallback() {
-                        @Override
-                        public void onSuccess(String response) {
-                            synchronized (lock) {
-                                success[0] = true;
-                                lock.notify();
-                            }
-                        }
-
-                        @Override
-                        public void onFailure(String error) {
-                            synchronized (lock) {
-                                upload.errorMessage = error;
-                                success[0] = false;
-                                lock.notify();
-                            }
-                        }
-                    }
-            );
-
-            // Wait for callback
-            synchronized (lock) {
-                lock.wait(35000); // 35 second timeout
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "Error uploading call log", e);
-            upload.errorMessage = e.getMessage();
-            return false;
-        }
-
-        return success[0];
-    }
+    // REMOVED: searchAndQueueRecording() deprecated method
+    // Recording search now handled exclusively by RecordingSearchWorker
 
     /**
      * Upload recording synchronously
@@ -263,29 +210,75 @@ public class SyncManager {
         final Object lock = new Object();
 
         try {
-            // Check if file still exists
-            File recordingFile = new File(upload.compressedFilePath != null ?
-                    upload.compressedFilePath : upload.recordingFilePath);
+            // Determine which file to use (compressed or original)
+            String filePath = upload.compressedFilePath != null ?
+                    upload.compressedFilePath : upload.recordingFilePath;
 
-            if (!recordingFile.exists()) {
-                Log.w(TAG, "Recording file not found: " + recordingFile.getPath());
-                upload.errorMessage = "File not found";
+            if (filePath == null) {
+                Log.e(TAG, "Both compressed and original file paths are null");
+                upload.errorMessage = "No file path available";
                 return false;
             }
 
-            // For recordings, we need the call log ID
-            // Since we may not have it, we'll need to modify the API to accept phone number and timestamp
-            // For now, we'll use a placeholder ID of 0 and the server should handle it
+            File recordingFile = new File(filePath);
+
+            // FIXED: Check file existence immediately before upload
+            if (!recordingFile.exists()) {
+                Log.w(TAG, "Recording file not found: " + recordingFile.getPath());
+
+                // If compressed file missing but original exists, try original
+                if (upload.compressedFilePath != null && upload.recordingFilePath != null) {
+                    File originalFile = new File(upload.recordingFilePath);
+                    if (originalFile.exists()) {
+                        Log.d(TAG, "Compressed file missing, using original: " +
+                              originalFile.getPath());
+                        recordingFile = originalFile;
+                    } else {
+                        upload.errorMessage = "Recording file deleted";
+                        return false;
+                    }
+                } else {
+                    upload.errorMessage = "Recording file deleted";
+                    return false;
+                }
+            }
+
+            // Verify file is readable and has size > 0
+            if (!recordingFile.canRead()) {
+                Log.e(TAG, "Recording file not readable: " + recordingFile.getPath());
+                upload.errorMessage = "File not readable";
+                return false;
+            }
+
+            if (recordingFile.length() == 0) {
+                Log.e(TAG, "Recording file is empty: " + recordingFile.getPath());
+                upload.errorMessage = "File is empty";
+                return false;
+            }
+
+            Log.d(TAG, "Uploading recording file: " + recordingFile.getPath() +
+                  " (size: " + recordingFile.length() + " bytes)");
+
+            // Use the stored call_log_id for accurate recording association
+            final File finalRecordingFile = recordingFile; // For lambda
             apiService.uploadRecording(
                     token,
-                    0, // Placeholder - server should match by phone number and timestamp
-                    recordingFile,
+                    upload.callLogId, // Use the actual call_log_id from when the call was uploaded
+                    finalRecordingFile,
                     upload.callDuration,
                     new ApiService.ApiCallback() {
                         @Override
                         public void onSuccess(String response) {
                             synchronized (lock) {
                                 success[0] = true;
+                                // Clean up compressed file after successful upload
+                                if (upload.compressedFilePath != null) {
+                                    File compressedFile = new File(upload.compressedFilePath);
+                                    if (compressedFile.exists() && compressedFile.delete()) {
+                                        Log.d(TAG, "Deleted compressed file after upload: " +
+                                              compressedFile.getName());
+                                    }
+                                }
                                 lock.notify();
                             }
                         }
@@ -301,9 +294,9 @@ public class SyncManager {
                     }
             );
 
-            // Wait for callback
+            // Wait for callback (increased to 95s to accommodate ApiService 90s write timeout + buffer)
             synchronized (lock) {
-                lock.wait(60000); // 60 second timeout for file upload
+                lock.wait(95000); // 95 second timeout for file upload
             }
         } catch (Exception e) {
             Log.e(TAG, "Error uploading recording", e);
@@ -327,6 +320,58 @@ public class SyncManager {
                 callback.onCount(0);
             }
         });
+    }
+
+    /**
+     * PHASE 3.1: Start monitoring MediaStore for new recordings
+     * Call this from your Application class or main activity
+     */
+    public void startRecordingObserver() {
+        if (recordingObserver == null) {
+            recordingObserver = new RecordingContentObserver(context,
+                new RecordingContentObserver.RecordingDetectedCallback() {
+                    @Override
+                    public void onRecordingDetected(android.net.Uri recordingUri, long dateAdded) {
+                        Log.d(TAG, "Recording detected via ContentObserver: " + recordingUri);
+                        // ContentObserver notifies us immediately when a recording is added
+                        // The RecordingSearchWorker will handle the actual matching and queueing
+                        // This reduces the initial wait time from 5s to near-instant
+                    }
+                });
+            recordingObserver.startObserving();
+            Log.i(TAG, "Recording ContentObserver started");
+        } else {
+            Log.d(TAG, "Recording ContentObserver already running");
+        }
+    }
+
+    /**
+     * PHASE 3.1: Stop monitoring MediaStore
+     * Call this when the app is shutting down or user logs out
+     */
+    public void stopRecordingObserver() {
+        if (recordingObserver != null) {
+            recordingObserver.stopObserving();
+            recordingObserver = null;
+            Log.i(TAG, "Recording ContentObserver stopped");
+        }
+    }
+
+    /**
+     * PHASE 3.3: Update server time drift from API response
+     * Call this whenever you receive a timestamp from the server
+     *
+     * @param serverTimestampMs Server's current time in milliseconds
+     */
+    public void updateServerTimeDrift(long serverTimestampMs) {
+        TimeUtils.updateServerTimeDrift(serverTimestampMs);
+    }
+
+    /**
+     * PHASE 3.3: Log current time information for debugging
+     */
+    public void logTimeInfo() {
+        TimeUtils.logTimeInfo();
     }
 
     /**

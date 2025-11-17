@@ -10,6 +10,11 @@ import java.util.concurrent.TimeUnit;
 
 public class ApiService {
     private static final String TAG = "ApiService";
+    // DEVELOPMENT: Using local IP for physical device testing
+    // private static final String BASE_URL = "http://192.168.1.3:8000/api"; // Physical device testing
+    // EMULATOR: Using 10.0.2.2 to access host machine's localhost from Android emulator
+    // private static final String BASE_URL = "http://10.0.2.2:8000/api"; // Emulator testing
+    // PRODUCTION: Production server URL
     private static final String BASE_URL = "https://calllog.aptinfotech.com/api"; // Production server
 
     private static ApiService instance;
@@ -18,9 +23,9 @@ public class ApiService {
 
     private ApiService() {
         client = new OkHttpClient.Builder()
-                .connectTimeout(30, TimeUnit.SECONDS)
-                .writeTimeout(30, TimeUnit.SECONDS)
-                .readTimeout(30, TimeUnit.SECONDS)
+                .connectTimeout(40, TimeUnit.SECONDS)  // Increased from 30s
+                .writeTimeout(90, TimeUnit.SECONDS)    // Increased from 30s for large file uploads
+                .readTimeout(40, TimeUnit.SECONDS)     // Increased from 30s
                 .build();
         gson = new Gson();
     }
@@ -184,27 +189,73 @@ public class ApiService {
                 @Override
                 public void onResponse(Call call, Response response) throws IOException {
                     String responseBody = response.body().string();
+                    Log.d(TAG, "Call log upload response code: " + response.code());
+                    Log.d(TAG, "Call log upload response body: " + responseBody);
+
                     try {
                         JSONObject jsonResponse = new JSONObject(responseBody);
                         if (response.isSuccessful() && jsonResponse.getBoolean("success")) {
                             Log.d(TAG, "Call log uploaded successfully");
-                            // Extract call log ID from response
-                            JSONObject data = jsonResponse.getJSONObject("data");
-                            JSONArray callLogs = data.getJSONArray("call_logs");
-                            if (callLogs.length() > 0) {
-                                JSONObject callLog = callLogs.getJSONObject(0);
-                                int callLogId = callLog.getInt("id");
+
+                            // IMPROVED: Robust call_log_id extraction with multiple fallback strategies
+                            Integer callLogId = null;
+
+                            // Strategy 1: Extract from data.call_logs array (expected format)
+                            if (jsonResponse.has("data")) {
+                                JSONObject data = jsonResponse.getJSONObject("data");
+
+                                if (data.has("call_logs")) {
+                                    JSONArray callLogs = data.getJSONArray("call_logs");
+                                    if (callLogs.length() > 0) {
+                                        JSONObject callLog = callLogs.getJSONObject(0);
+                                        if (callLog.has("id")) {
+                                            callLogId = callLog.getInt("id");
+                                            Log.d(TAG, "Extracted call_log_id from data.call_logs[0].id: " + callLogId);
+                                        }
+                                    }
+                                }
+
+                                // Strategy 2: Fallback - Try top-level data.id
+                                if (callLogId == null && data.has("id")) {
+                                    callLogId = data.getInt("id");
+                                    Log.d(TAG, "Extracted call_log_id from data.id (fallback): " + callLogId);
+                                }
+
+                                // Strategy 3: Fallback - Try data.call_log_id
+                                if (callLogId == null && data.has("call_log_id")) {
+                                    callLogId = data.getInt("call_log_id");
+                                    Log.d(TAG, "Extracted call_log_id from data.call_log_id (fallback): " + callLogId);
+                                }
+                            }
+
+                            // Strategy 4: Fallback - Try top-level call_log_id
+                            if (callLogId == null && jsonResponse.has("call_log_id")) {
+                                callLogId = jsonResponse.getInt("call_log_id");
+                                Log.d(TAG, "Extracted call_log_id from root (fallback): " + callLogId);
+                            }
+
+                            // Validate extracted ID
+                            if (callLogId != null && callLogId > 0) {
+                                Log.d(TAG, "Successfully extracted call_log_id: " + callLogId);
                                 callback.onSuccess(String.valueOf(callLogId));
                             } else {
-                                callback.onSuccess("Call log uploaded");
+                                // All extraction strategies failed
+                                Log.e(TAG, "Failed to extract valid call_log_id from response");
+                                Log.e(TAG, "Response body: " + responseBody);
+                                callback.onFailure("Call log ID not found in response");
                             }
                         } else {
                             String message = jsonResponse.optString("message", "Upload failed");
+                            Log.e(TAG, "Call log upload failed: " + message);
+                            // Log validation errors if present
+                            if (jsonResponse.has("errors")) {
+                                Log.e(TAG, "Validation errors: " + jsonResponse.get("errors").toString());
+                            }
                             callback.onFailure(message);
                         }
                     } catch (Exception e) {
-                        Log.e(TAG, "Error parsing upload response", e);
-                        callback.onFailure("Error parsing response");
+                        Log.e(TAG, "Error parsing upload response. Body: " + responseBody, e);
+                        callback.onFailure("Error parsing response: " + e.getMessage());
                     }
                 }
             });
@@ -218,10 +269,14 @@ public class ApiService {
     public void uploadRecording(String token, int callLogId, java.io.File recordingFile,
                                 long duration, final ApiCallback callback) {
         try {
+            // Get the correct MIME type based on file extension
+            String mimeType = getMimeTypeFromFileName(recordingFile.getName());
+            Log.d(TAG, "Uploading recording with MIME type: " + mimeType + ", file: " + recordingFile.getName());
+
             // Create multipart request body
             RequestBody fileBody = RequestBody.create(
                 recordingFile,
-                MediaType.parse("audio/*")
+                MediaType.parse(mimeType)
             );
 
             RequestBody requestBody = new MultipartBody.Builder()
@@ -274,6 +329,212 @@ public class ApiService {
             Log.e(TAG, "Error creating recording upload request", e);
             callback.onFailure("Error: " + e.getMessage());
         }
+    }
+
+    // PHASE 1.2: Upload call log with idempotency key
+    public void uploadCallLogWithIdempotency(String token, String idempotencyKey,
+                                              String callerName, String callerNumber,
+                                              String callType, long duration, String timestamp,
+                                              JSONObject simInfo, final ApiCallback callback) {
+        try {
+            JSONObject json = new JSONObject();
+            json.put("caller_name", callerName != null ? callerName : "Unknown");
+            json.put("caller_number", callerNumber);
+            json.put("call_type", callType);
+            json.put("call_duration", duration);
+            json.put("call_timestamp", timestamp);
+
+            // Add SIM information if available
+            if (simInfo != null) {
+                if (simInfo.has("sim_slot_index")) {
+                    json.put("sim_slot_index", simInfo.get("sim_slot_index"));
+                }
+                if (simInfo.has("sim_name")) {
+                    json.put("sim_name", simInfo.get("sim_name"));
+                }
+                if (simInfo.has("sim_number")) {
+                    json.put("sim_number", simInfo.get("sim_number"));
+                }
+            }
+
+            RequestBody body = RequestBody.create(
+                json.toString(),
+                MediaType.parse("application/json")
+            );
+
+            Request request = new Request.Builder()
+                    .url(BASE_URL + "/call-logs")
+                    .post(body)
+                    .addHeader("Content-Type", "application/json")
+                    .addHeader("Accept", "application/json")
+                    .addHeader("Authorization", "Bearer " + token)
+                    .addHeader("Idempotency-Key", idempotencyKey) // PHASE 1.2
+                    .build();
+
+            client.newCall(request).enqueue(new Callback() {
+                @Override
+                public void onFailure(Call call, IOException e) {
+                    Log.e(TAG, "Upload call log failed", e);
+                    callback.onFailure("Network error: " + e.getMessage());
+                }
+
+                @Override
+                public void onResponse(Call call, Response response) throws IOException {
+                    String responseBody = response.body().string();
+                    try {
+                        JSONObject jsonResponse = new JSONObject(responseBody);
+                        if (response.isSuccessful() && jsonResponse.getBoolean("success")) {
+                            Integer callLogId = extractCallLogId(jsonResponse, responseBody);
+                            if (callLogId != null && callLogId > 0) {
+                                callback.onSuccess(String.valueOf(callLogId));
+                            } else {
+                                callback.onFailure("Call log ID not found");
+                            }
+                        } else {
+                            String message = jsonResponse.optString("message", "Upload failed");
+                            callback.onFailure(message);
+                        }
+                    } catch (Exception e) {
+                        callback.onFailure("Error parsing response: " + e.getMessage());
+                    }
+                }
+            });
+        } catch (Exception e) {
+            callback.onFailure("Error: " + e.getMessage());
+        }
+    }
+
+    // PHASE 1.2: Upload recording with idempotency key and checksum
+    public void uploadRecordingWithIdempotency(String token, String idempotencyKey,
+                                                String checksum, int callLogId,
+                                                java.io.File recordingFile, long duration,
+                                                final ApiCallback callback) {
+        try {
+            RequestBody fileBody = RequestBody.create(
+                recordingFile,
+                MediaType.parse("audio/*")
+            );
+
+            MultipartBody.Builder builder = new MultipartBody.Builder()
+                    .setType(MultipartBody.FORM)
+                    .addFormDataPart("call_log_id", String.valueOf(callLogId))
+                    .addFormDataPart("duration", String.valueOf(duration))
+                    .addFormDataPart("recording", recordingFile.getName(), fileBody);
+
+            // PHASE 4.3: Add checksum if available
+            if (checksum != null && !checksum.isEmpty()) {
+                builder.addFormDataPart("checksum", checksum);
+            }
+
+            RequestBody requestBody = builder.build();
+
+            Request request = new Request.Builder()
+                    .url(BASE_URL + "/call-recordings")
+                    .post(requestBody)
+                    .addHeader("Accept", "application/json")
+                    .addHeader("Authorization", "Bearer " + token)
+                    .addHeader("Idempotency-Key", idempotencyKey) // PHASE 1.2
+                    .build();
+
+            client.newCall(request).enqueue(new Callback() {
+                @Override
+                public void onFailure(Call call, IOException e) {
+                    Log.e(TAG, "Recording upload failed", e);
+                    callback.onFailure("Network error: " + e.getMessage());
+                }
+
+                @Override
+                public void onResponse(Call call, Response response) throws IOException {
+                    String responseBody = response.body().string();
+                    try {
+                        JSONObject jsonResponse = new JSONObject(responseBody);
+                        if (response.isSuccessful() && jsonResponse.getBoolean("success")) {
+                            Log.d(TAG, "Recording uploaded successfully");
+                            callback.onSuccess("Recording uploaded");
+                        } else {
+                            String message = jsonResponse.optString("message", "Upload failed");
+                            callback.onFailure(message);
+                        }
+                    } catch (Exception e) {
+                        callback.onFailure("Error parsing response");
+                    }
+                }
+            });
+        } catch (Exception e) {
+            callback.onFailure("Error: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Get MIME type from file extension
+     * Returns appropriate MIME type that the server will accept
+     */
+    private String getMimeTypeFromFileName(String fileName) {
+        if (fileName == null) {
+            return "application/octet-stream";
+        }
+
+        String lowerName = fileName.toLowerCase();
+
+        // Audio formats
+        if (lowerName.endsWith(".m4a")) {
+            return "audio/m4a";
+        } else if (lowerName.endsWith(".mp3")) {
+            return "audio/mpeg";
+        } else if (lowerName.endsWith(".wav")) {
+            return "audio/wav";
+        } else if (lowerName.endsWith(".3gp")) {
+            return "audio/3gpp";
+        } else if (lowerName.endsWith(".amr")) {
+            return "audio/amr";
+        } else if (lowerName.endsWith(".ogg")) {
+            return "audio/ogg";
+        } else if (lowerName.endsWith(".aac")) {
+            return "audio/aac";
+        } else if (lowerName.endsWith(".flac")) {
+            return "audio/flac";
+        }
+        // Video formats
+        else if (lowerName.endsWith(".mp4")) {
+            return "video/mp4";
+        } else if (lowerName.endsWith(".3gpp")) {
+            return "video/3gpp";
+        }
+        // Default fallback
+        else {
+            return "application/octet-stream";
+        }
+    }
+
+    // Helper method to extract call log ID from various response formats
+    private Integer extractCallLogId(JSONObject jsonResponse, String responseBody) {
+        try {
+            // Strategy 1: data.call_logs[0].id
+            if (jsonResponse.has("data")) {
+                JSONObject data = jsonResponse.getJSONObject("data");
+                if (data.has("call_logs")) {
+                    JSONArray callLogs = data.getJSONArray("call_logs");
+                    if (callLogs.length() > 0) {
+                        return callLogs.getJSONObject(0).getInt("id");
+                    }
+                }
+                // Strategy 2: data.id
+                if (data.has("id")) {
+                    return data.getInt("id");
+                }
+            }
+            // Strategy 3: call_log_id
+            if (jsonResponse.has("call_log_id")) {
+                return jsonResponse.getInt("call_log_id");
+            }
+            // Strategy 4: id
+            if (jsonResponse.has("id")) {
+                return jsonResponse.getInt("id");
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error extracting call log ID", e);
+        }
+        return null;
     }
 
     // Register device
