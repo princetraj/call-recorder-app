@@ -16,6 +16,7 @@ public class SplashActivity extends Activity {
     private static final int SPLASH_DISPLAY_LENGTH = 2500; // 2.5 seconds
     private PrefsManager prefsManager;
     private ApiService apiService;
+    private Handler splashHandler; // Handler for cleanup
 
     private ImageView splashLogo;
     private TextView splashTitle;
@@ -41,12 +42,22 @@ public class SplashActivity extends Activity {
         startAnimations();
 
         // Check login status after a delay
-        new Handler().postDelayed(new Runnable() {
+        splashHandler = new Handler();
+        splashHandler.postDelayed(new Runnable() {
             @Override
             public void run() {
                 checkLoginStatus();
             }
         }, SPLASH_DISPLAY_LENGTH);
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        // Clean up handler to prevent memory leak
+        if (splashHandler != null) {
+            splashHandler.removeCallbacksAndMessages(null);
+        }
     }
 
     private void startAnimations() {

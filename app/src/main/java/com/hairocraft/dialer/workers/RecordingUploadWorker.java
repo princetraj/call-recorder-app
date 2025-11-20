@@ -264,16 +264,19 @@ public class RecordingUploadWorker extends Worker {
 
     /**
      * PHASE 4.3: Calculate MD5 checksum of file
+     * Fixed: Use try-with-resources to prevent resource leak
      */
     private String calculateMD5(File file) throws Exception {
         MessageDigest md = MessageDigest.getInstance("MD5");
-        FileInputStream fis = new FileInputStream(file);
-        byte[] buffer = new byte[8192];
-        int bytesRead;
-        while ((bytesRead = fis.read(buffer)) != -1) {
-            md.update(buffer, 0, bytesRead);
+
+        // Try-with-resources automatically closes FileInputStream even on exception
+        try (FileInputStream fis = new FileInputStream(file)) {
+            byte[] buffer = new byte[8192];
+            int bytesRead;
+            while ((bytesRead = fis.read(buffer)) != -1) {
+                md.update(buffer, 0, bytesRead);
+            }
         }
-        fis.close();
 
         byte[] digest = md.digest();
         StringBuilder sb = new StringBuilder();

@@ -148,17 +148,49 @@ public class CallLogUploadWorker extends Worker {
             queueDao.update(upload);
             Log.d(TAG, "Call log upload completed for UUID: " + uuid);
 
-            // Schedule recording search if we have a call log ID
+            // Schedule recording search ONLY if:
+            // 1. We have a valid call log ID
+            // 2. Call type is NOT missed or rejected (these calls have no recordings)
+            // 3. Call duration is greater than 0 (zero duration = no connection = no recording)
             if (callLogId[0] > 0) {
-                com.hairocraft.dialer.sync.RecordingSearchWorker.scheduleSearch(
-                    context,
-                    callLogId[0],
-                    upload.phoneNumber,
-                    upload.callTimestamp,
-                    upload.callDuration,
-                    upload.contactName,
-                    uuid
-                );
+                boolean shouldSearchRecording = true;
+
+                // Skip recording search for missed calls
+                if ("missed".equals(upload.callType)) {
+                    Log.d(TAG, "Skipping recording search for MISSED call");
+                    shouldSearchRecording = false;
+                }
+
+                // Skip recording search for rejected calls
+                if ("rejected".equals(upload.callType)) {
+                    Log.d(TAG, "Skipping recording search for REJECTED call");
+                    shouldSearchRecording = false;
+                }
+
+                // Skip recording search for zero duration calls
+                if (upload.callDuration <= 0) {
+                    Log.d(TAG, "Skipping recording search for ZERO DURATION call (duration: " +
+                          upload.callDuration + " seconds)");
+                    shouldSearchRecording = false;
+                }
+
+                // Only schedule recording search for answered calls with duration > 0
+                if (shouldSearchRecording) {
+                    Log.d(TAG, "Scheduling recording search for " + upload.callType +
+                          " call (duration: " + upload.callDuration + " seconds)");
+                    com.hairocraft.dialer.sync.RecordingSearchWorker.scheduleSearch(
+                        context,
+                        callLogId[0],
+                        upload.phoneNumber,
+                        upload.callTimestamp,
+                        upload.callDuration,
+                        upload.contactName,
+                        uuid
+                    );
+                } else {
+                    Log.i(TAG, "Recording search skipped - Call type: " + upload.callType +
+                          ", Duration: " + upload.callDuration + " seconds");
+                }
             }
 
             return Result.success();

@@ -12,6 +12,8 @@ import android.os.IBinder;
 import android.graphics.Color;
 import android.telephony.PhoneStateListener;
 import android.telephony.TelephonyManager;
+import android.net.ConnectivityManager;
+import android.net.NetworkInfo;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
@@ -195,6 +197,12 @@ public class PersistentService extends Service {
             return;
         }
 
+        // Check network availability before making API call to save battery
+        if (!isNetworkAvailable()) {
+            android.util.Log.d("PersistentService", "No network available, skipping device status update");
+            return;
+        }
+
         ApiService apiService = ApiService.getInstance();
         // IMPORTANT: Pass context to enable remote logout handling from admin panel
         apiService.updateDeviceStatus(token, deviceInfoCollector.getDeviceStatusInfo(), this,
@@ -209,5 +217,19 @@ public class PersistentService extends Service {
                     android.util.Log.e("PersistentService", "Device status update failed: " + error);
                 }
             });
+    }
+
+    /**
+     * Check if network is available
+     * @return true if network is connected, false otherwise
+     */
+    private boolean isNetworkAvailable() {
+        ConnectivityManager connectivityManager =
+                (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        if (connectivityManager != null) {
+            NetworkInfo activeNetworkInfo = connectivityManager.getActiveNetworkInfo();
+            return activeNetworkInfo != null && activeNetworkInfo.isConnected();
+        }
+        return false;
     }
 }

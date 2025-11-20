@@ -303,23 +303,29 @@ public class MainActivity extends Activity {
             return;
         }
 
-        String token = prefsManager.getAuthToken();
+        final String token = prefsManager.getAuthToken();
         if (token == null || token.isEmpty()) {
             return;
         }
 
-        DeviceInfoCollector deviceInfo = new DeviceInfoCollector(this);
-        apiService.updateDeviceStatus(token, deviceInfo.getDeviceStatusInfo(), this, new ApiService.ApiCallback() {
+        // Move to background thread to avoid blocking UI
+        new Thread(new Runnable() {
             @Override
-            public void onSuccess(String result) {
-                Log.d("MainActivity", "Device permissions updated");
-            }
+            public void run() {
+                DeviceInfoCollector deviceInfo = new DeviceInfoCollector(MainActivity.this);
+                apiService.updateDeviceStatus(token, deviceInfo.getDeviceStatusInfo(), MainActivity.this, new ApiService.ApiCallback() {
+                    @Override
+                    public void onSuccess(String result) {
+                        Log.d("MainActivity", "Device permissions updated");
+                    }
 
-            @Override
-            public void onFailure(String error) {
-                Log.e("MainActivity", "Failed to update device permissions: " + error);
+                    @Override
+                    public void onFailure(String error) {
+                        Log.e("MainActivity", "Failed to update device permissions: " + error);
+                    }
+                });
             }
-        });
+        }).start();
     }
 
     private void updateUI() {
@@ -543,30 +549,38 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        // Clear screen wake lock to prevent battery drain
+        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         // Restart the service when activity is destroyed
         Intent broadcastIntent = new Intent(this, RestartReceiver.class);
         sendBroadcast(broadcastIntent);
     }
 
-    private void registerDevice(String token) {
-        DeviceInfoCollector deviceInfo = new DeviceInfoCollector(this);
-        apiService.registerDevice(token, deviceInfo.getDeviceRegistrationInfo(), new ApiService.ApiCallback() {
+    private void registerDevice(final String token) {
+        // Move to background thread to avoid blocking UI
+        new Thread(new Runnable() {
             @Override
-            public void onSuccess(String result) {
-                runOnUiThread(new Runnable() {
+            public void run() {
+                DeviceInfoCollector deviceInfo = new DeviceInfoCollector(MainActivity.this);
+                apiService.registerDevice(token, deviceInfo.getDeviceRegistrationInfo(), new ApiService.ApiCallback() {
                     @Override
-                    public void run() {
-                        Toast.makeText(MainActivity.this, "Device registered", Toast.LENGTH_SHORT).show();
+                    public void onSuccess(String result) {
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                Toast.makeText(MainActivity.this, "Device registered", Toast.LENGTH_SHORT).show();
+                            }
+                        });
+                    }
+
+                    @Override
+                    public void onFailure(String error) {
+                        // Silent failure - device registration is not critical
+                        android.util.Log.e("MainActivity", "Device registration failed: " + error);
                     }
                 });
             }
-
-            @Override
-            public void onFailure(String error) {
-                // Silent failure - device registration is not critical
-                android.util.Log.e("MainActivity", "Device registration failed: " + error);
-            }
-        });
+        }).start();
     }
 
     @Override

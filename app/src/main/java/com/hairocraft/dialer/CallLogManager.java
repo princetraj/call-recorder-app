@@ -109,12 +109,18 @@ public class CallLogManager {
                                 Log.d(TAG, "Removed processed calls from active tracking. " +
                                       "Remaining active: " + activeCallNumbers.size());
 
-                                // Wait for call log to be written
+                                // Wait for call log to be written, then process in background
                                 new android.os.Handler().postDelayed(new Runnable() {
                                     @Override
                                     public void run() {
-                                        uploadLatestCallLog();
-                                        Log.d(TAG, "Upload triggered for " + callCount + " call(s): " + callsToProcess);
+                                        // Execute on background thread to avoid blocking UI
+                                        executorService.execute(new Runnable() {
+                                            @Override
+                                            public void run() {
+                                                uploadLatestCallLog();
+                                                Log.d(TAG, "Upload triggered for " + callCount + " call(s): " + callsToProcess);
+                                            }
+                                        });
                                     }
                                 }, 3000); // Wait 3 seconds for system to write call log
                             } else {
